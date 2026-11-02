@@ -1,4 +1,4 @@
-/* Quant v13.0 · quant-journal.js
+/* Quant v13.4 · quant-journal.js
    留痕层：开盘模型前向、盘中触发档案、localStorage 读写。冻结口径与 quant-core.js 一致。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -42,7 +42,7 @@ function intradayEntries() {
 
 function saveIntraday(entries) {
     state.intradayRecords = entries.slice(0, 300);
-    safeSet("quant_v11_intraday_v1", { version: C.VERSION, executionModel: "INTRADAY_V1", entries: state.intradayRecords });
+    safeSet("quant_v11_intraday_v1", { version: C.VERSION, entries: state.intradayRecords });
   }
 
 function canonicalIntradayConfig(cfg) {
@@ -67,7 +67,7 @@ function captureIntradayTriggers() {
         tq = p.triggerQ || p.Q, te = p.triggerE || p.E,
         q = currentQuote(r), nowIso = new Date().toISOString();
       entries.unshift({
-        id, planKey: a.planKey, version: C.VERSION, executionModel: "INTRADAY_V1",
+        id, planKey: a.planKey, version: C.VERSION, executionModel: "INTRADAY_V2",
         savedAt: nowIso, firstTriggeredAt: new Date(q.qtime).toISOString(), dataAsOf: r.barsDate || null,
         recordOrigin: "PRE_ENTRY", done: false, pendingStage: "等待入场日日K完成",
         pendingDetail: "模型按首次五门通过报价建档；不代表用户实际成交", nextCheckDate: "入场日完成日K入库后",
@@ -126,7 +126,7 @@ function renderIntradayJournal() {
     const all = intradayEntries(), s = C.summarizeIntraday(all),
       metric = (label, value) => `<div><span class="small muted">${label}</span><b>${value}</b></div>`,
       dash = (x, d = 2) => Number.isFinite(x) ? fmt(x, d) : "—";
-    $("intradayOutput").innerHTML = `<div class="result-grid">${metric("首次触发快照", s.total)}${metric("已结算 / 待结算", `${s.closed} / ${s.pending}`)}${metric("平均净R", dash(s.avgR, 3))}${metric("Profit factor", Number.isFinite(s.profitFactor) ? pfText(s.profitFactor) : s.profitFactor === Infinity ? "∞" : "—")}</div><div class="notice ${s.closed < 30 ? "" : "info"}">${esc(s.status)}。这是独立 Intraday v1 模型：首次五门通过时按当时报价模拟入场并计成本，不是用户实际成交；与开盘价前向模型绝不混合。</div><p class="small muted">触发保存公开报价、确认样本、Q／E、冻结几何和参数指纹。入场日没有触发后的逐笔路径，因此退出、MFE／MAE只从下一完成日K开始；A股与美股均不利用入场日完整日K倒推当日退出。记录仅保存当前浏览器，最多300条。</p>${all.length ? `<table><thead><tr><th>标的 / 通道</th><th>日线触发 / 盘中触发</th><th>入场 / 净赔率 / 量能</th><th>触发Q/E与盘中E</th><th>状态 / 净R</th><th>确认证据</th></tr></thead><tbody>${all.slice(0, 30).map((e) => `<tr><td>${esc(e.name)}<div class="stock-code">${esc(e.code)}</div></td><td>${esc(C.CHANNELS[e.channel].name)}<div class="small muted">${esc(e.triggerDate)} / ${esc(e.executionDate)}</div></td><td class="num">${dash(e.entryPrice)}<div class="small muted">${dash(e.netRR)}∶1 / ${dash(e.volumePace)}×</div></td><td class="num">${dash(e.Q, 1)} / ${dash(e.E, 1)}<div class="small muted">E盘中 ${dash(e.E_intraday, 1)}</div></td><td>${e.done ? esc(e.result && e.result.reason || "已结束") : esc(e.pendingStage || "待结算")}<div class="num small">${e.done && e.result && Number.isFinite(e.result.R) ? fmt(e.result.R, 3) : "—"}</div></td><td class="small">${e.confirmation ? `${e.confirmation.required}次报价 · 区内 ${e.confirmation.heldZone ? "是" : "否"} · 未走弱 ${e.confirmation.notWeakening ? "是" : "否"}` : "—"}<div class="muted">${esc(e.quote && e.quote.source || "—")} · ${esc(e.firstTriggeredAt || "—")}</div></td></tr>`).join("")}</tbody></table>` : '<div class="empty"><strong>尚无盘中触发记录</strong>盘前预案和单次报价不会建档；只有五门首次全部通过才生成不可变模型快照。</div>'}`;
+    $("intradayOutput").innerHTML = `<div class="result-grid">${metric("首次触发快照", s.total)}${metric("已结算 / 待结算", `${s.closed} / ${s.pending}`)}${metric("平均净R", dash(s.avgR, 3))}${metric("Profit factor", Number.isFinite(s.profitFactor) ? pfText(s.profitFactor) : s.profitFactor === Infinity ? "∞" : "—")}</div><div class="notice ${s.closed < 30 ? "" : "info"}">${esc(s.status)}。这是独立 Intraday v2 模型：首次五门通过时按当时报价模拟入场并计成本，不是用户实际成交；与开盘价前向模型绝不混合。</div><p class="small muted">触发保存公开报价、确认样本、Q／E、冻结几何和参数指纹。入场日没有触发后的逐笔路径，因此退出、MFE／MAE只从下一完成日K开始；A股与美股均不利用入场日完整日K倒推当日退出。记录仅保存当前浏览器，最多300条。</p>${all.length ? `<table><thead><tr><th>标的 / 通道</th><th>日线触发 / 盘中触发</th><th>入场 / 净赔率 / 量能</th><th>触发Q/E与盘中E</th><th>状态 / 净R</th><th>确认证据</th></tr></thead><tbody>${all.slice(0, 30).map((e) => `<tr><td>${esc(e.name)}<div class="stock-code">${esc(e.code)}</div></td><td>${esc(C.CHANNELS[e.channel].name)}<div class="small muted">${esc(e.triggerDate)} / ${esc(e.executionDate)}</div></td><td class="num">${dash(e.entryPrice)}<div class="small muted">${dash(e.netRR)}∶1 / ${dash(e.volumePace)}×</div></td><td class="num">${dash(e.Q, 1)} / ${dash(e.E, 1)}<div class="small muted">E盘中 ${dash(e.E_intraday, 1)}</div></td><td>${e.done ? esc(e.result && e.result.reason || "已结束") : esc(e.pendingStage || "待结算")}<div class="num small">${e.done && e.result && Number.isFinite(e.result.R) ? fmt(e.result.R, 3) : "—"}</div></td><td class="small">${e.confirmation ? `${e.confirmation.required}次报价 · 区内 ${e.confirmation.heldZone ? "是" : "否"} · 未走弱 ${e.confirmation.notWeakening ? "是" : "否"}` : "—"}<div class="muted">${esc(e.quote && e.quote.source || "—")} · ${esc(e.firstTriggeredAt || "—")}</div></td></tr>`).join("")}</tbody></table>` : '<div class="empty"><strong>尚无盘中触发记录</strong>盘前预案和单次报价不会建档；只有五门首次全部通过才生成不可变模型快照。</div>'}`;
   }
 
 const FORWARD_KEY = "quant_v10_forward_v1";

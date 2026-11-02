@@ -1,4 +1,4 @@
-/* Quant v13.0 · quant-main.js
+/* Quant v13.4 · quant-main.js
    启动与事件层：共享状态、全局工具、模块加载校验、规则插件加载（RULE_MANIFEST）、事件绑定、boot。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → 本文件（最后）。 */
 "use strict";
@@ -901,7 +901,7 @@ function bindEvents() {
       downloadJSON({ type: "objective-replay", ...state.lastReplay }, `quant_${C.VERSION}_完整回放.json`);
     });
     $("exportIntradayBtn").addEventListener("click", () => {
-      downloadJSON({ type: "intraday-forward-journal", executionModel: "INTRADAY_V1", exportedAt: new Date().toISOString(), entries: intradayEntries() }, `quant_${C.VERSION}_盘中触发与前向.json`);
+      downloadJSON({ type: "intraday-forward-journal", exportedAt: new Date().toISOString(), entries: intradayEntries() }, `quant_${C.VERSION}_盘中触发与前向.json`);
     });
     $("clearIntradayBtn").addEventListener("click", () => {
       if (!intradayEntries().length && !Object.keys(state.intradaySamples).length) return toast("当前没有盘中记录或样本");

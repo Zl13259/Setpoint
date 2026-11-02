@@ -1,4 +1,4 @@
-/* Quant v13.0 · 规则插件模板（rule-template.js）
+/* Quant v13.4 · 规则插件模板（rule-template.js）
    用法：复制为 rule-<你的名字>.js → 修改 id 与逻辑 →
         到 quant-main.js 的 RULE_MANIFEST 加一行 { file: "rule-<名字>.js", v: "1.0" }。
    生效范围：日线触发判定与回放共用此规则；实时、回放口径一致。

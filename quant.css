@@ -1,4 +1,4 @@
-/* Quant v13.0 · 样式（quant.css）。与 quant.html 同目录；改动后同步 ?v= 版本参数。 */
+/* Quant v13.4 · 样式（quant.css）。与 quant.html 同目录；改动后同步 ?v= 版本参数。 */
 :root{
   --p-navy:oklch(0.21 0.025 265);--p-navy-2:oklch(0.27 0.035 265);--p-paper:oklch(0.982 0.003 95);--p-panel:oklch(0.996 0.002 95);--p-ink:oklch(0.235 0.022 265);--p-muted:oklch(0.47 0.022 265);--p-line:oklch(0.875 0.012 265);--p-soft:oklch(0.95 0.009 265);--p-teal:oklch(0.48 0.09 185);--p-teal-soft:oklch(0.93 0.035 185);--p-red:oklch(0.51 0.18 28);--p-red-soft:oklch(0.94 0.035 28);--p-green:oklch(0.46 0.11 155);--p-amber:oklch(0.49 0.11 75);--p-amber-soft:oklch(0.95 0.04 90);
   --surface:var(--p-paper);--panel:var(--p-panel);--ink:var(--p-ink);--muted:var(--p-muted);--line:var(--p-line);--accent:var(--p-navy);--accent-2:var(--p-navy-2);--up:var(--p-red);--down:var(--p-green);--warn:var(--p-amber);--ok:var(--p-teal);--soft:var(--p-soft);

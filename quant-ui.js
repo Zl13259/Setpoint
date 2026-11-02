@@ -1,4 +1,4 @@
-/* Quant v13.0 · quant-ui.js
+/* Quant v13.4 · quant-ui.js
    渲染层：信号台、详情、回放汇总、诊断等全部 DOM 渲染。只读 state，不改判定逻辑。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -204,7 +204,12 @@ function entryLineText(g, price) {
 
 function freshLineText(p) {
     if (!p) return "信号 —";
-    return `信号：${p.triggerDate || "—"}${p.age === 0 ? "首次触发" : `触发后${p.age}日`}｜开盘窗 ${p.usedAttempts ?? 0}/${p.maxAttempts ?? "—"}，余 ${p.remainingAttempts ?? "—"} 次`;
+    const windowText = p.expiredReason === "结构失效"
+      ? "开盘窗已关闭·结构失效"
+      : p.expiredReason === "窗口耗尽"
+        ? "开盘窗已用完"
+        : `余 ${p.remainingAttempts ?? "—"} 次`;
+    return `信号：${p.triggerDate || "—"}${p.age === 0 ? "首次触发" : `触发后${p.age}日`}｜开盘窗 ${p.usedAttempts ?? 0}/${p.maxAttempts ?? "—"}，${windowText}`;
   }
 
 function scoreBadgeHTML(p, preview = false) {
@@ -348,11 +353,15 @@ function currentIntraday(r) {
 function intradayHTML(r, detail = false) {
     if (isIndex(r.code)) return "";
     const a = currentIntraday(r),
+      gp = a.gateProgress,
+      progressLine = gp && gp.total
+        ? `<span class="small muted" style="display:block;margin-top:2px">五门进度 ${gp.passed}/${gp.total}｜${gp.failed.length ? "距触发还差：" + gp.failed.map(esc).join("、") : "全部通过"}</span>`
+        : "",
       checks = detail && a.checks && a.checks.length
         ? `<span class="intraday-checks">${a.checks.map((x) => `<span class="${x.pass ? "ok" : "warn"}">${x.pass ? "通过" : "未过"}·${esc(x.label)}：${esc(x.detail)}</span>`).join("")}</span>`
         : "";
     const simTag = a.simulated ? '<span class="badge research">收盘模拟</span> ' : "";
-    return `<span class="intraday-copy tone-${esc(a.tone)}"><strong>${simTag}盘中｜${esc(a.title)}</strong><span>${esc(a.detail)}</span>${checks}</span>`;
+    return `<span class="intraday-copy tone-${esc(a.tone)}"><strong>${simTag}盘中｜${esc(a.title)}</strong><span>${esc(a.detail)}</span>${progressLine}${checks}</span>`;
   }
 
 function intradayChecksHTML(r) {

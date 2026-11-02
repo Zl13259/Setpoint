@@ -1012,9 +1012,15 @@ const QuantCore = (() => {
     const p = o.primary,
       planKey = intradayPlanKey(o, quoteDay),
       baseChecks = [];
-    const out = (state, title, detail, tone = "neutral", extra = {}) => ({
+    const gateProgress = () => {
+      const list = baseChecks.slice(),
+        passed = list.filter((x) => x.pass).length;
+      return { passed, total: list.length, failed: list.filter((x) => !x.pass).map((x) => x.label) };
+    },
+    out = (state, title, detail, tone = "neutral", extra = {}) => ({
       state, title, detail, tone, live: session.state === "REGULAR", actionable: false,
-      quoteDay, planKey, executionModel: "INTRADAY_V1", checks: baseChecks.slice(), ...extra,
+      quoteDay, planKey, executionModel: "INTRADAY_V2", checks: baseChecks.slice(),
+      gateProgress: gateProgress(), ...extra,
     });
     const check = (key, label, pass, detail) => {
       const row = { key, label, pass: pass === true, detail };
@@ -1065,10 +1071,11 @@ const QuantCore = (() => {
     if (!quote.qtime)
       return out("DATA_ERROR", "不操作｜报价时间缺失", "盘中缺少可核验报价时间，禁止把延迟报价当实时行情", "danger");
     const age = now.getTime() - Number(quote.qtime);
-    if (!simulated && (quoteDay !== z.day || age < -5 * 60e3))
-      return out("DATA_ERROR", "不操作｜报价日期异常", `行情日 ${quoteDay || "—"} 与本地交易日 ${z.day} 不一致`, "danger");
-    if (quoteDay <= p.triggerDate)
-      return out("WAIT_DATE", "等待下一交易日｜不提前执行", `触发日 ${p.triggerDate} 的完成日K只能形成后续交易时段预案`, "neutral");
+    if ((!simulated && (quoteDay !== z.day || age < -5 * 60e3)) || quoteDay < p.triggerDate)
+      return out("DATA_ERROR", "不操作｜报价日期异常",
+        quoteDay < p.triggerDate
+          ? `行情日 ${quoteDay || "—"} 早于触发日 ${p.triggerDate}，存在数据错位`
+          : `行情日 ${quoteDay || "—"} 与本地交易日 ${z.day} 不一致`, "danger");
     if (age > cfg.intradayQuoteMaxAgeSec * 1000)
       return out("STALE", "不操作｜可执行报价已陈旧", `报价已 ${Math.floor(age / 60e3)} 分钟未更新；超过 ${cfg.intradayQuoteMaxAgeSec} 秒执行阈值，只保留观察`, "danger");
     if (o.status === "MODEL_ENTERED") {
@@ -1079,14 +1086,18 @@ const QuantCore = (() => {
         return out("RISK_TARGET", "目标触及｜复核开盘模型退出", `现价 ${round(price, 4)} ≥ 冻结目标 ${round(g.target, 4)}${sameDayA}；不追加仓位`, "ok");
       return out("MODEL_MONITOR", "开盘模型监控中｜不追加、不新开", `现价 ${round(price, 4)}；止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}。盘中执行模型不重复入场`, "neutral");
     }
-    const maxAge = Math.max(0, (CHANNELS[p.channel] || { maxAge: 2 }).maxAge - 2);
+    const maxAge = 2;
     if (!Number.isFinite(p.age) || p.age > maxAge)
-      return out("EXPIRED", "盘中窗口结束｜不沿用旧价位", `该通道只允许原信号有效期内执行；当前信号年龄 ${p.age ?? "—"}，允许值 ≤${maxAge}`, "neutral");
+      return out("EXPIRED", "盘中窗口结束｜不沿用旧价位", `盘中五门只在信号年龄 ≤${maxAge} 个交易日内开放；当前信号年龄 ${p.age ?? "—"}`, "neutral");
     if (p.liquidity && p.liquidity.pass === false)
       return out("BLOCKED", "不操作｜日线流动性门槛未通过", p.liquidity.reason || "成交额不足，不能由盘中报价抵消", "warn");
 
     const current = repriceGeometry(g, price, cfg), rr = current.netRR,
-      inZone = price >= g.zoneLo && price <= g.zoneHi,
+      zoneDrift = Number.isFinite(p.age) && p.age >= 1 ? 0.01 : 0,
+      zoneLoEff = g.zoneLo * (1 - zoneDrift),
+      zoneHiEff = g.zoneHi * (1 + zoneDrift),
+      driftNote = zoneDrift ? `（信号${p.age}日，放宽至冻结区±1%：${round(zoneLoEff, 4)}～${round(zoneHiEff, 4)}）` : "",
+      inZone = price >= zoneLoEff && price <= zoneHiEff,
       structurePass = price > g.stop && !(validPositive(quote.low) && +quote.low <= g.stop),
       rrPass = Number.isFinite(rr) && rr >= cfg.minRR,
       riskCheck = executionRiskCheck(g, price, cfg),
@@ -1103,7 +1114,7 @@ const QuantCore = (() => {
         ? (+quote.amount / Math.max(5, elapsed)) / (averageAmount20 / totalMinutes) : null,
       volumePass = Number.isFinite(volumePace) && volumePace >= cfg.intradayMinVolumePace;
     check("structure", "结构有效", structurePass, structurePass ? "现价与日内低点未触及冻结止损" : "日内已触及冻结失效锚点");
-    check("zone", "价格在冻结入场区", inZone, `${round(price, 4)} / ${round(g.zoneLo, 4)}～${round(g.zoneHi, 4)}`);
+    check("zone", "价格在冻结入场区", inZone, `${round(price, 4)} / ${round(zoneLoEff, 4)}～${round(zoneHiEff, 4)}${driftNote}`);
     check("rr", "成本后净赔率", rrPass, `${Number.isFinite(rr) ? round(rr, 2) : "—"}∶1 / 门槛 ${round(cfg.minRR, 1)}∶1`);
     check("riskDistance", "止损距离", riskCheck.pass, riskCheck.reason || (riskCheck.unavailable ? "旧档案缺少ATR，沿用原几何" : `${round(riskCheck.stopAtr, 2)} ATR / 允许 ${round(cfg.minStopAtr, 1)}～${round(cfg.maxStopAtr, 1)} ATR`));
     check("tradable", "可成交性", tradablePass, nearLimitUp ? "接近涨停且位于日内高价，无法确认可成交" : "未发现当前报价级成交拦截");
@@ -1117,10 +1128,10 @@ const QuantCore = (() => {
       tail = samples.slice(-required),
       spaced = tail.length === required && tail[tail.length - 1].qtime - tail[0].qtime >= cfg.intradayMinSampleGapSec * 1000 &&
         tail[tail.length - 1].qtime - tail[0].qtime <= cfg.intradayConfirmWindowSec * 1000,
-      heldZone = tail.length === required && tail.every((x) => +x.price >= g.zoneLo && +x.price <= g.zoneHi && +x.price > g.stop),
+      heldZone = tail.length === required && tail.every((x) => +x.price >= zoneLoEff && +x.price <= zoneHiEff && +x.price > g.stop),
       notWeakening = tail.length === required && +tail[tail.length - 1].price >= +tail[0].price,
-      testedLow = p.channel !== "oversold" || (validPositive(quote.low) && +quote.low <= g.zoneLo) ||
-        samples.some((x) => (validPositive(x.low) && +x.low <= g.zoneLo) || +x.price < g.zoneLo),
+      testedLow = p.channel !== "oversold" || (validPositive(quote.low) && +quote.low <= zoneLoEff) ||
+        samples.some((x) => (validPositive(x.low) && +x.low <= zoneLoEff) || +x.price < zoneLoEff),
       confirmPass = spaced && heldZone && notWeakening && testedLow,
       confirmDetail = `${Math.min(tail.length, required)}/${required} 次连续区内报价｜间隔${spaced ? "✓" : "✗"} ${cfg.intradayMinSampleGapSec}～${cfg.intradayConfirmWindowSec}秒｜区内持有${heldZone ? "✓" : "✗"}｜未走弱${notWeakening ? "✓" : "✗"}${p.channel === "oversold" ? `｜测试下沿后收复${testedLow ? "✓" : "✗"}` : ""}`;
     check("confirmation", "盘中连续确认", confirmPass, confirmDetail);
@@ -1130,10 +1141,10 @@ const QuantCore = (() => {
       suggestedLimit: g.zoneHi, validOnlyToday: true, simulated };
     if (!structurePass)
       return out("INVALIDATED", "结构风险｜放弃盘中入场", `现价或日内低点已触及冻结失效锚点 ${round(g.stop, 4)}；今日不复活该预案`, "danger", common);
-    if (price < g.zoneLo)
-      return out("WAIT_ZONE", p.channel === "oversold" ? "等待收复｜暂不接刀" : "等待回到突破区｜不提前买", `现价 ${round(price, 4)}＜${round(g.zoneLo, 4)}；不向下移动入场区`, "warn", common);
-    if (price > g.zoneHi)
-      return out("WAIT_ZONE", "高于入场区｜不追价", `现价 ${round(price, 4)}＞${round(g.zoneHi, 4)}；冻结入场区不随盘中上涨上移`, "warn", common);
+    if (price < zoneLoEff)
+      return out("WAIT_ZONE", p.channel === "oversold" ? "等待收复｜暂不接刀" : "等待回到突破区｜不提前买", `现价 ${round(price, 4)}＜${round(zoneLoEff, 4)}${driftNote}；不向下移动入场区`, "warn", common);
+    if (price > zoneHiEff)
+      return out("WAIT_ZONE", "高于入场区｜不追价", `现价 ${round(price, 4)}＞${round(zoneHiEff, 4)}${driftNote}；冻结入场区不随盘中上涨上移`, "warn", common);
     if (!riskCheck.pass)
       return out("RISK_DISTANCE", "止损距离不合格｜不开仓", riskCheck.reason, "warn", common);
     if (!rrPass)
@@ -1191,7 +1202,7 @@ const QuantCore = (() => {
         return {
           status: "EXPIRED", statusText: "已失效·结构失效",
           note: "等待期间已完成日K触及失效锚点，取消后续开盘窗口。",
-          attempts, usedAttempts: i, remainingAttempts: 0, maxAttempts,
+          attempts, usedAttempts: i, remainingAttempts: Math.max(0, maxAttempts - i), maxAttempts,
           horizon: "CLOSED", expiredReason: "结构失效",
         };
       const decision = openingDecision(signal, entryBars[i], market, o.config);
@@ -1219,7 +1230,7 @@ const QuantCore = (() => {
       return {
         status: "EXPIRED", statusText: "已失效·结构失效",
         note: "等待期间触及失效锚点，取消后续开盘窗口。",
-        attempts, usedAttempts: used, remainingAttempts: 0, maxAttempts,
+        attempts, usedAttempts: used, remainingAttempts: Math.max(0, maxAttempts - used), maxAttempts,
         horizon: "CLOSED", expiredReason: "结构失效",
       };
     if (used >= maxAttempts)
@@ -2225,7 +2236,7 @@ const QuantCore = (() => {
       R = (exit - entry) / initialRisk, actualBars = holdingBars.slice(0, exitIndex + 1),
       closePath = actualBars.map((b, i) => ({ t: i + 1, date: b.date, close: b.close, netR: netR(b.close), netReturnPct: netReturnPct(b.close) }));
     return {
-      status: "CLOSED", settled, rightCensored: !settled, executionModel: "INTRADAY_V1",
+      status: "CLOSED", settled, rightCensored: !settled, executionModel: "INTRADAY_V2",
       entryDate, exitDate, entry: entryPrice, entryCost: entry, initialRisk, exit, R, reason,
       exitIndex, holdingTradingDays: exitIndex + 1, firstTargetDay, firstStopDay,
       mfeR: max(actualBars.map((b) => netR(b.high))), maeR: min(actualBars.map((b) => netR(b.low))),
@@ -2245,7 +2256,7 @@ const QuantCore = (() => {
       by[channel] = { channel, ...gs, pending: rows.filter((e) => !e.done && e.channel === channel).length };
     }
     return {
-      executionModel: "INTRADAY_V1", total: rows.length, closed: closed.length, skipped: skipped.length,
+      executionModel: "INTRADAY_V2", total: rows.length, closed: closed.length, skipped: skipped.length,
       pending: rows.length - closed.length - skipped.length, ...stats,
       channels: Object.values(by), status: closed.length < 30 ? "样本不足·仅前向诊断" : "探索性样本≥30·仍非有效性证明",
     };
@@ -2861,6 +2872,24 @@ const QuantCore = (() => {
       const a = intradayAdvice(o);
       return !a.actionable && a.state === "NO_PLAN";
     });
+    test("信号当日盘后即开放五门试算，不再跨日排队", () => {
+      const base = intraBase(),
+        postSame = {
+          ...base,
+          now: new Date("2026-10-26T12:00:00Z"),
+          quote: { ...base.quote, qtime: Date.parse("2026-10-26T07:00:00Z") },
+        },
+        aSame = intradayAdvice(postSame);
+      return aSame.state !== "WAIT_DATE" && (aSame.state === "NON_SESSION" || aSame.state === "SIMULATED");
+    });
+    test("信号年龄放宽至2日且须落在冻结区±1%漂移护栏内", () => {
+      const o = intraBase(); o.primary.age = 2;
+      const a2 = intradayAdvice(o),
+        a3 = intradayAdvice({ ...o, primary: { ...o.primary, age: 3 } }),
+        aDrift = intradayAdvice({ ...o, quote: { ...o.quote, price: 11.15 } });
+      return a2.actionable && a3.state === "EXPIRED" &&
+        aDrift.state === "WAIT_ZONE" && !aDrift.actionable;
+    });
     test("同一报价与样本重复计算保持纯函数", () => {
       const o = intraBase(), before = JSON.stringify(o), a = intradayAdvice(o), b = intradayAdvice(o);
       return JSON.stringify(a) === JSON.stringify(b) && JSON.stringify(o) === before;
@@ -2892,7 +2921,7 @@ const QuantCore = (() => {
         { channel: "breakout", done: true, result: { status: "CLOSED", settled: true, R: 1 } },
         { channel: "oversold", done: false },
       ]);
-      return s.total === 2 && s.closed === 1 && s.pending === 1 && s.avgR === 1 && s.executionModel === "INTRADAY_V1";
+      return s.total === 2 && s.closed === 1 && s.pending === 1 && s.avgR === 1 && s.executionModel === "INTRADAY_V2";
     });
     test("未入场目标越过自动归档且模型入场继续监控", () => {
       const g = { stop: 8, target: 12 };
