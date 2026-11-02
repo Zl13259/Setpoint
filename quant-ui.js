@@ -520,7 +520,7 @@ function renderBreakoutPreview() {
     $("breakoutPreviewRows").innerHTML = visible.map(({ r, p, ret2 }) => {
       const g = p.geometry,
         allPass = p.above && p.volumeOk && p.priceOk,
-        status = p.prefiltered ? "整区赔率不足·仅观察" : allPass ? "若收盘仍满足→可形成正式预案" : p.above ? "价格已越压·其余条件待确认" : "等待收盘越压",
+        status = p.prefiltered ? "预筛未过（赔率或止损距离）·仅观察" : allPass ? "若收盘仍满足→可形成正式预案" : p.above ? "价格已越压·其余条件待确认" : "等待收盘越压",
         geometry = `${fmt(g.zoneLo)}～${fmt(g.zoneHi)}<br><span class="small muted">止损 ${fmt(g.stop)} / 目标 ${fmt(g.target)}</span><br><span class="small muted">整区最优 ${rrText({ ...g, valid: true, netRR: p.zoneBestRR })}</span>`;
       return `<tr><td data-label="标的"><div class="stock-name">${esc(r.name)}</div><div class="stock-code">${esc(r.code)}</div></td><td data-label="现价 / 近2日" class="num">${fmt(r.price)}<br><span class="small ${ret2 > 0 ? "up" : ret2 < 0 ? "down" : "muted"}">近2日 ${ret2 === null ? "—" : (ret2 > 0 ? "+" : "") + fmt(ret2, 1) + "%"}</span></td><td data-label="收盘价格条件" class="num">收盘＞${fmt(p.requiredClose)}<br><span class="small muted">前20日压力 ${fmt(p.pressure)}</span></td><td data-label="全日量能 / 收盘位置" class="num">全日量≥${previewVolume(p.requiredVolume, r.market)}<br><span class="small muted">当前 ${previewVolume(p.currentVolume, r.market)} · 位置 ${fmt(p.closePos * 100, 0)}%／需≥55%</span></td><td data-label="下一交易日预估" class="num">${geometry}</td><td data-label="预告状态"><span class="badge ${p.prefiltered || !allPass ? "wait" : "plan"}">${esc(status)}</span></td></tr>`;
     }).join("");

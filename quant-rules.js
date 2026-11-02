@@ -9,8 +9,8 @@
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v13.0",
-  STRATEGY_VERSION: "OPENING_DAILY_V1",
+  VERSION: "v13.3",
+  STRATEGY_VERSION: "OPENING_DAILY_V3",
   DEFAULTS: {
     minBars: 80,
     minAmountA: 5e7,

@@ -265,6 +265,11 @@ const QuantCore = (() => {
           sd = Math.sqrt(mean(last20.map((x) => (x.close - mu) ** 2)));
         return sd ? (c[i] - mu) / sd : 0;
       })(),
+      atrRank: (() => {
+        const w = atr.slice(Math.max(0, i - 59), i + 1).filter(Number.isFinite);
+        return w.length ? w.filter((v) => v <= a).length / w.length : null;
+      })(),
+      atrArr: atr,
       atrPrior5: atr[i - 5],
       atrPrior20: priorAtr,
       baseHigh,
@@ -378,7 +383,7 @@ const QuantCore = (() => {
         m.closePos * 30 +
         clamp(((m.volRatio || 0) / 2) * 35, 0, 35),
     );
-    const rs = m.rs20 === null ? null : sc(50 + m.rs20 * 4);
+    const rs = m.rs20 === null ? null : sc(m.rs20 <= 0 ? 0 : 50 + m.rs20 * 4);
     return {
       value:
         rs === null
@@ -407,7 +412,8 @@ const QuantCore = (() => {
         metrics: {},
       };
     if (channel === "oversold") {
-      let event = -1;
+      let event = -1,
+        eventZ = null;
       for (let j = Math.max(20, n - 11); j < n; j++) {
         const z = f.rsi[j],
           slice = b.slice(j - 19, j + 1),
@@ -415,7 +421,10 @@ const QuantCore = (() => {
           sd = Math.sqrt(mean(slice.map((y) => (y.close - mu) ** 2))),
           zz = sd ? (b[j].close - mu) / sd : 0,
           drop = j >= 5 ? (b[j].close / b[j - 5].close - 1) * 100 : 0;
-        if (z <= 30 || zz <= -2 || drop <= -12) event = j;
+        if ((z <= 30 || zz <= -2 || drop <= -12) && (eventZ === null || zz < eventZ)) {
+          event = j;
+          eventZ = zz;
+        }
       }
       if (event < 0) {
         base.missing = ["近10日无明确超跌事件"];
@@ -423,6 +432,9 @@ const QuantCore = (() => {
       }
       const eb = b[event],
         after = b.slice(event + 1);
+      const atrEvt = max(f.atrArr.slice(event, Math.min(n, event + 4)).filter(Number.isFinite)) || f.atr,
+        atrPctEvt = eb.close > 0 ? (atrEvt / eb.close) * 100 : null,
+        requiredStable = atrPctEvt === null ? 1 : atrPctEvt >= 2.0 ? 3 : atrPctEvt >= 1.0 ? 2 : 1;
       const stableBars = b.slice(event + 1, -1);
       let stableBeforeTrigger = 0;
       for (const y of stableBars) {
@@ -440,7 +452,7 @@ const QuantCore = (() => {
         cross5 = x.close > f.ma5[i] && p.close <= f.ma5[i - 1],
         trigger =
           noNewLow &&
-          stableBeforeTrigger > 0 &&
+          stableBeforeTrigger >= requiredStable &&
           (breakPrevHigh || cross5) &&
           x.close > f.ma5[i];
       Object.assign(base.metrics, {
@@ -455,6 +467,7 @@ const QuantCore = (() => {
           return sd ? (eb.close - mu) / sd : 0;
         })(),
         stableCount: stableBeforeTrigger,
+        requiredStable,
         noNewLow,
         volContraction: f.volume < f.volAvg20,
         breakPrevHigh,
@@ -469,15 +482,15 @@ const QuantCore = (() => {
       });
       base.evidence = [
         `超跌日 ${eb.date}，RSI ${round(f.rsi[event], 1)}`,
-        `其后企稳 bar ${stableBeforeTrigger} 根`,
+        `其后企稳 bar ${stableBeforeTrigger} 根（事件期 ATR 峰值 ${atrPctEvt === null ? "—" : round(atrPctEvt, 1)}%，要求 ≥${requiredStable} 根）`,
       ];
-      base.stage = trigger ? 3 : stableBeforeTrigger && noNewLow ? 2 : 1;
+      base.stage = trigger ? 3 : stableBeforeTrigger >= requiredStable && noNewLow ? 2 : 1;
       if (!trigger)
         base.missing = [
           !noNewLow
             ? "结构未修复：仍在破坏超跌低点，等待重新筑底"
-            : !stableBeforeTrigger
-              ? "尚未出现企稳证据"
+            : stableBeforeTrigger < requiredStable
+              ? `企稳证据不足：需 ${requiredStable} 根企稳 bar，现有 ${stableBeforeTrigger} 根（高波动品种要求更多企稳确认）`
               : "尚未出现反弹触发",
         ];
       if (base.stage === 3) {
@@ -739,7 +752,7 @@ const QuantCore = (() => {
       return groups.slice(0, -1).slice(-limit);
     };
     const out = [];
-    for (const [period, groups] of [["周线", aggregate(weekKey, 30)], ["月线", aggregate((d) => d.slice(0, 7), 18)]]) {
+    for (const [period, groups] of [["周线", aggregate(weekKey, 52)], ["月线", aggregate((d) => d.slice(0, 7), 24)]]) {
       for (let i = 1; i < groups.length - 1; i++) {
         const g = groups[i];
         if (g.high >= groups[i - 1].high && g.high >= groups[i + 1].high && g.high > anchorPrice * 1.002)
@@ -851,7 +864,7 @@ const QuantCore = (() => {
       near = f.close >= f.baseHigh - f.atr * 0.6 && f.close <= f.baseHigh + f.atr * 1.5;
     return { pressure: f.baseHigh, atr: f.atr, requiredClose, requiredVolume,
       currentVolume: f.volume, closePos: f.closePos, above, volumeOk, priceOk, near,
-      geometry, zoneBestRR: bestRR, prefiltered: !(Number.isFinite(bestRR) && bestRR >= c.minRR) };
+      geometry, zoneBestRR: bestRR, prefiltered: !(Number.isFinite(bestRR) && bestRR >= c.minRR) || !executionRiskCheck(geometry, geometry.zoneLo, c).pass };
   }
   function liquidity(f, market, cfg) {
     const threshold = market === "A" ? cfg.minAmountA : cfg.minAmountUS;
@@ -1385,7 +1398,9 @@ const QuantCore = (() => {
         triggerGeometry = s.geometry,
         g = repriceGeometry(triggerGeometry, base.price, cfg),
         bestZoneRR = zoneBestRR(triggerGeometry, cfg),
-        prefiltered = !(Number.isFinite(bestZoneRR) && bestZoneRR >= cfg.minRR),
+        zoneRiskCheck = channel === "pullback" ? { pass: true } : executionRiskCheck(triggerGeometry, triggerGeometry.zoneLo, cfg),
+        rrPrefail = !(Number.isFinite(bestZoneRR) && bestZoneRR >= cfg.minRR),
+        prefiltered = channel !== "pullback" && (rrPrefail || !zoneRiskCheck.pass),
         limitPct = market === "A" ? priceLimit(o.code, o.name) : null,
         reasons = [];
       g.triggerPrice = triggerClose;
@@ -1426,9 +1441,15 @@ const QuantCore = (() => {
       } else if (["NEXT_SESSION_PLAN", "WAIT_ENTRY"].includes(status)) {
         if (prefiltered) {
           status = "RESEARCH_ONLY";
-          statusText = "预筛剔除·整区赔率不足";
-          reasons.push(`冻结入场区最优净赔率 ${round(bestZoneRR, 2) ?? "—"}∶1＜${round(cfg.minRR, 1)}∶1`);
-          executionNote = "整个冻结入场区均无法达到赔率门，默认退出信号台；研究与回放保留。";
+          if (rrPrefail) {
+            statusText = "预筛剔除·整区赔率不足";
+            reasons.push(`冻结入场区最优净赔率 ${round(bestZoneRR, 2) ?? "—"}∶1＜${round(cfg.minRR, 1)}∶1`);
+            executionNote = "整个冻结入场区均无法达到赔率门，默认退出信号台；研究与回放保留。";
+          } else {
+            statusText = "预筛剔除·止损距离不合格";
+            reasons.push(`入场区下沿止损距离 ${round(zoneRiskCheck.stopAtr, 2)} ATR 不在允许区间 ${round(cfg.minStopAtr, 1)}～${round(cfg.maxStopAtr, 1)} ATR`);
+            executionNote = "止损过近易被日常波动扫损或过宽风险失控，整个入场区均无法通过执行门槛，默认退出信号台；研究与回放保留。";
+          }
         } else if (reasons.length) {
           status = g.netRR >= 1 && g.netRR < cfg.minRR ? "RESEARCH_ONLY" : "REJECTED";
           statusText = statusLabel(status);
@@ -1476,7 +1497,7 @@ const QuantCore = (() => {
     const eligible = base.channels.filter((x) => x.status !== "OBSERVING");
     if (eligible.length) {
       const primaryRank = (x) =>
-        x.status === "RESEARCH_ONLY" && x.statusText === "预筛剔除·整区赔率不足" ? 7.5 : statusRank(x.status);
+        x.prefiltered ? 7.5 : statusRank(x.status);
       eligible.sort(
         (a, b) =>
           primaryRank(a) - primaryRank(b) ||
@@ -1487,7 +1508,7 @@ const QuantCore = (() => {
       base.primary = eligible[0];
       base.status = base.primary.status;
       base.statusText = base.primary.statusText || statusLabel(base.status);
-      base.prefiltered = base.primary.status === "RESEARCH_ONLY" && base.primary.statusText === "预筛剔除·整区赔率不足";
+      base.prefiltered = base.primary.status === "RESEARCH_ONLY" && String(base.primary.statusText || "").startsWith("预筛剔除");
       base.archiveReason = base.primary.archiveReason || null;
       const active = eligible.filter((x) =>
         ["NEXT_SESSION_PLAN", "WAIT_ENTRY", "MODEL_ENTERED"].includes(x.status),

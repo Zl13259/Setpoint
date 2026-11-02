@@ -232,7 +232,7 @@ async function loadQuotes(codes) {
     return result;
   }
 
-const KLINE_CACHE_PREFIX = "quant_v130_k_";
+const KLINE_CACHE_PREFIX = "quant_" + String((globalThis.QRULES && globalThis.QRULES.VERSION) || "").replace(/[^0-9a-z]/gi, "") + "_k_";
 
 function cacheKey(code) {
     return KLINE_CACHE_PREFIX + code;
@@ -294,10 +294,11 @@ async function klineEM(code) {
     let lastError = null;
     for (const secid of emSecidCandidates(code)) {
       try {
+        const limit = isUS(code) ? 320 : 520;
         const url =
             "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" +
             secid +
-            "&klt=101&fqt=1&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57&beg=0&end=20500101&lmt=320",
+            "&klt=101&fqt=1&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57&beg=0&end=20500101&lmt=" + limit,
           j = await jsonp(url),
           kl = j && j.data && j.data.klines;
         if (!kl || kl.length < 30) throw new Error("东财日K不足");
@@ -330,7 +331,7 @@ async function klineTX(code) {
       for (const key of keys) {
         try {
           const url =
-              host + "?param=" + key + ",day,,,320,qfq&_=" + Date.now(),
+              host + "?param=" + key + ",day,," + (isUS(code) ? 320 : 520) + ",qfq&_=" + Date.now(),
             j = await fetchJSON(url),
             d = j && j.data && (j.data[key] || j.data[code]),
             arr = d && (d.qfqday || d.day);
@@ -428,7 +429,7 @@ function klineSina(code) {
           gname +
           "=/CN_MarketDataService.getKLineData?symbol=" +
           sym +
-          "&scale=240&ma=no&datalen=320";
+          "&scale=240&ma=no&datalen=520";
       document.head.appendChild(s);
     });
   }
