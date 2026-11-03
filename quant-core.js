@@ -1,4 +1,4 @@
-/* Quant v13.0 objective signal and intraday execution core. No DOM, storage, network or account rules.
+/* Quant v13.5 objective signal and intraday execution core. No DOM, storage, network or account rules.
    纯内核：参数/通道/排除名单来自 globalThis.QRULES（quant-rules.js），插件规则来自 globalThis.QuantRules。 */
 const QuantCore = (() => {
   "use strict";
@@ -999,6 +999,7 @@ const QuantCore = (() => {
     const p = o.primary || {};
     return [o.code || "unknown", p.channel || "none", p.triggerDate || "none", quoteDay || "none"].join("|");
   }
+
   function intradayAdvice(o) {
     const cfg = { ...DEFAULTS, ...(o.config || {}) },
       now = o.now || new Date(), market = o.market || "A",
@@ -1198,13 +1199,27 @@ const QuantCore = (() => {
     const attempts = [],
       signal = { geometry: o.geometry, signalClose: o.signalClose, limitPct: o.limitPct };
     for (let i = 0; i < Math.min(maxAttempts, entryBars.length); i++) {
-      if (i > 0 && entryBars.slice(0, i).some((b) => b.completed && b.close <= o.geometry.stop))
+      const bar = entryBars[i],
+        barBroken = bar.completed
+          ? Number.isFinite(bar.close) && bar.close <= o.geometry.stop
+          : finite(quote.low) && +quote.low <= o.geometry.stop;
+      if (barBroken) {
+        attempts.push({
+          date: bar.date,
+          open: bar.open,
+          status: "SKIP",
+          reason: bar.completed ? "该完成日K收盘触及失效锚点" : "盘中低点触及失效锚点",
+          completed: !!bar.completed,
+        });
         return {
           status: "EXPIRED", statusText: "已失效·结构失效",
-          note: "等待期间已完成日K触及失效锚点，取消后续开盘窗口。",
-          attempts, usedAttempts: i, remainingAttempts: Math.max(0, maxAttempts - i), maxAttempts,
+          note: bar.completed
+            ? "该完成日K收盘已触及失效锚点：不在破位日开盘补入场，取消全部剩余窗口。"
+            : "盘中低点已触及冻结失效锚点：开盘与盘中两个执行模型均不再入场。",
+          attempts, usedAttempts: i + 1, remainingAttempts: Math.max(0, maxAttempts - i - 1), maxAttempts,
           horizon: "CLOSED", expiredReason: "结构失效",
         };
+      }
       const decision = openingDecision(signal, entryBars[i], market, o.config);
       attempts.push({
         date: entryBars[i].date,
@@ -1225,7 +1240,8 @@ const QuantCore = (() => {
     const used = attempts.length,
       remaining = Math.max(0, maxAttempts - used),
       structureBroken = completed.some((b) => b.close <= o.geometry.stop) ||
-        (finite(quote.price) && +quote.price <= o.geometry.stop);
+        (finite(quote.price) && +quote.price <= o.geometry.stop) ||
+        (session.state === "REGULAR" && finite(quote.low) && +quote.low <= o.geometry.stop);
     if (structureBroken)
       return {
         status: "EXPIRED", statusText: "已失效·结构失效",
@@ -1256,6 +1272,7 @@ const QuantCore = (() => {
       horizon: todayOpen ? "TODAY_OPEN" : "NEXT_SESSION",
     };
   }
+
   function completedBars(input, market, now) {
     const b = normalizeBars(input),
       z = tzInfo(now, market === "A" ? "Asia/Shanghai" : "America/New_York");
@@ -1611,6 +1628,7 @@ const QuantCore = (() => {
       return { status: "SKIP", reason: "开盘成本后净赔率不足" };
     return { status: "ENTER", reason: null, entryGeometry, open };
   }
+
   function executeTrade(signal, entryBar, futureBars, market, cfg) {
     const decision = openingDecision(signal, entryBar, market, cfg);
     if (decision.status === "SKIP") return decision;
@@ -1753,10 +1771,9 @@ const QuantCore = (() => {
       limit = Math.max(1, Math.min(maxAttempts, candidateBars.length)),
       stop = signal.geometry && signal.geometry.stop;
     for (let i = 0; i < limit; i++) {
-      if (i > 0 && Number.isFinite(stop)) {
-        const invalidated = candidateBars.slice(0, i).some((b) => b.close <= stop);
-        if (invalidated)
-          return { status: "SKIP", reason: "等待期间收盘触及失效锚点", pending: false, entryOffset: null, attempts };
+      if (Number.isFinite(stop) && Number.isFinite(candidateBars[i].close) && candidateBars[i].close <= stop) {
+        attempts.push({ date: candidateBars[i].date, status: "SKIP", reason: "该日收盘已触及失效锚点" });
+        return { status: "SKIP", reason: "等待期间收盘触及失效锚点", pending: false, entryOffset: null, attempts };
       }
       const researchDays = Math.max(cfg.holdingDays, 11),
         future = candidateBars.slice(i, i + researchDays),
@@ -1859,6 +1876,7 @@ const QuantCore = (() => {
     }
     return { trades, skipped, conflicts, diagnostics: { excluded: 0, conflictCount: conflicts.length } };
   }
+
   function scoreDiagnostics(trades) {
     const stats = (arr) => {
       const rs = arr.map((x) => x.R).filter(Number.isFinite);
@@ -2188,6 +2206,7 @@ const QuantCore = (() => {
       executionBlocked: trades.filter((t) => t.sawBlockedExit).length,
     };
   }
+
   function executeIntradayTrade(signal, entryDate, entryPrice, bars, market, cfg) {
     const all = normalizeBars(bars), entryBar = all.find((b) => b.date === entryDate);
     if (!entryBar) return { status: "PENDING", reason: "入场日日K尚未完成或缺失", entryDate };
@@ -2324,6 +2343,7 @@ const QuantCore = (() => {
     }
     return out;
   }
+
   function runSelfTests() {
     const tests = [];
     const test = (name, fn) => {
@@ -2612,6 +2632,25 @@ const QuantCore = (() => {
           quote: { price: 10, open: 10, high: 10, low: 10, qtime: now.getTime() },
           market: "US", now, config: DEFAULTS });
       return r.status === "EXPIRED" && r.statusText === "已失效·结构失效" && r.usedAttempts === 1;
+    });
+    test("破位完成日K不再允许同日开盘补入场", () => {
+      const bars = [{ date: "2026-01-02", open: 10, high: 10.2, low: 7.9, close: 7.8, volume: 1 }],
+        r = signalLifecycle({ channel: "breakout", triggerDate: "2026-01-01",
+          geometry: { valid: true, zoneLo: 9, zoneHi: 11, stop: 8, target: 16 },
+          signalClose: 10, limitPct: null, bars,
+          quote: { price: 7.8, open: 10, high: 10.2, low: 7.9, qtime: Date.parse("2026-01-03T00:00:00Z") },
+          market: "US", now: new Date("2026-01-03T00:00:00Z"), config: DEFAULTS });
+      return r.status === "EXPIRED" && r.expiredReason === "结构失效" && r.usedAttempts === 1 &&
+        !r.attempts.some((x) => x.status === "ENTER");
+    });
+    test("盘中低点穿透冻结止损开盘模型同步失效", () => {
+      const now = new Date("2026-10-27T14:30:00Z"),
+        r = signalLifecycle({ channel: "breakout", triggerDate: "2026-10-26",
+          geometry: { valid: true, zoneLo: 9, zoneHi: 11, stop: 8, target: 16 },
+          signalClose: 10, limitPct: null, bars: [],
+          quote: { price: 10, open: 10, high: 10.2, low: 7.9, qtime: now.getTime() },
+          market: "US", now, config: DEFAULTS });
+      return r.status === "EXPIRED" && r.expiredReason === "结构失效" && r.usedAttempts === 1;
     });
     test("盘中缺少当日开盘价时禁止猜测剩余窗口", () => {
       const now = new Date("2026-10-27T14:00:00Z"),

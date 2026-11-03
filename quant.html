@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Quant v13.4 客观信号与盘中执行台（模块化：规则外置＋插件挂钩）：策略版本独立、前向捕获链、分组审计与稳健性诊断。">
+<meta name="description" content="Quant v13.5 客观信号与盘中执行台（模块化：规则外置＋插件挂钩）：策略版本独立、前向捕获链、分组审计与稳健性诊断。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%2312141f'/%3E%3Cpath d='M8 21V11h8a5 5 0 0 1 0 10h-3v4H8zm5-7v4h3a2 2 0 0 0 0-4h-3z' fill='%23f6f6f4'/%3E%3C/svg%3E">
-<title>Quant v13.4 · 客观信号与盘中执行台（模块化）</title>
-<link rel="stylesheet" href="quant.css?v=13.4">
+<title>Quant v13.5 · 客观信号与盘中执行台（模块化）</title>
+<link rel="stylesheet" href="quant.css?v=13.5">
 </head>
 <body>
 <div id="fatal" class="notice" style="display:none;position:sticky;top:0;z-index:99;margin:0;border-radius:0"></div>
 <header class="mast">
 <div class="mast-main">
-<div class="brand"><div><h1>Quant <span class="num">v13.4</span></h1><p>客观信号与盘中执行台</p></div></div>
+<div class="brand"><div><h1>Quant <span class="num">v13.5</span></h1><p>客观信号与盘中执行台</p></div></div>
 <div class="mast-actions"><button class="secondary" id="manageBtn" type="button">研究池与设置</button><button class="primary" id="refreshBtn" type="button">刷新信号</button></div>
 </div>
 <nav class="tabs" role="tablist" aria-label="研究视图">
@@ -49,13 +49,16 @@
 <h3>因果时间合同</h3><p>只使用截至 t 日收盘已完成的数据形成日K信号，最早在下一交易时段执行。盘中未完成K线不参与 Q。摆动低点必须有右侧K线确认，不能把信号回填到事后最低点。v11.1 的盘中突破预告仅做条件试算，不形成正式信号或前向样本；预估入场区、止损与目标在收盘后重新冻结。</p>
 <h3>决策链</h3><div class="formula">日线：数据质量 → 三通道 → 冻结交易几何 → Q / E → 开盘研究模型<br>盘中：盘前预案 → 新鲜报价 → 结构有效 → 连续价格确认＋量能节奏 → 现价净赔率＋可成交 → 首次触发留痕 → 独立前向结算<br>账户：风险预算÷止损幅度 → 环境／事件仓位折扣与账户红线人工复核</div>
 <h3>三通道</h3><ul><li><b>超跌反弹：</b>近10日出现超跌，随后有企稳证据（v13.3 起按 ATR 近60日分位分级要求：≥80% 需3根、≥50% 需2根、低波动1根），当前反弹触发且超跌低点未失效。</li><li><b>趋势回踩：</b>MA20/MA60 与斜率确认原趋势，回踩明确支撑后重新转强。</li><li><b>突破确认：</b>前20日基底与压力明确，价格、收盘位置和量能共同确认，RS 相对同市场参考基准计算（v13.3 起跑输基准时 RS 子项计 0，不给弱于大盘的突破送高分）。</li></ul>
-<h3>交易几何</h3><p>入场区、止损与目标由触发时的结构锚点固定，不随当前价格移动。净赔率计入费用与双边滑点假设；1.5 是研究门槛，不是正期望的数学证明。目标与止损同时展示百分比和 ATR 距离；ATR 空间提示不是新增门槛，压力近时应降级或放弃，而非拉远目标。止损是计划价，不保证跳空或涨跌停时成交。</p>
+<h3>交易几何</h3><p>入场区、止损与目标由触发时的结构锚点固定，不随当前价格移动。净赔率显示口径默认整区最优（v13.5 起），现价口径为辅；1.5 是研究门槛，不是正期望的数学证明。目标与止损同时展示百分比和 ATR 距离（显式标注测量基准：现价／入场区下沿）；ATR 空间提示不是新增门槛，压力近时应降级或放弃，而非拉远目标。止损距离低于 0.8 ATR 展示"赔率虚高"警示（低于 0.5 ATR 仍为硬拒绝）。止损是计划价，不保证跳空或涨跌停时成交。</p>
 <div class="formula">净赔率 = 目标净收益 ÷ 止损净损失<br>S = 0.60 × Q + 0.40 × E（只作同通道启发式基线）</div>
 <h3>硬门槛</h3><p>数据不足或陈旧、通道未成立、结构失效、几何非法、净赔率不足、流动性不合格、疑似涨停不可成交，均不能被高分抵消。实际开盘与盘中入场另检查止损距离：低于0.5 ATR或高于2.5 ATR均拒绝执行，不移动结构止损。价格离开入场区只改变执行状态，不允许追价；环境状态单列，不乘入 Q/E/S。</p>
-<h3>双执行模型与当日生命周期</h3><p>开盘研究模型继续按实际开盘价检查，突破1次、超跌2次，用于和既有历史回放保持可比。盘中执行模型独立运行：盘前不生成隔夜挂单；连续竞价时，报价不得超过180秒；五门在信号年龄 ≤2 个交易日内开放，开盘模型判废当日即执行、不跨日排队，年龄 ≥1 日时价格须落在冻结入场区 ±1% 的漂移护栏内；超跌还须先测试入场区下沿后收复；至少2次连续区内有效报价，间隔45～600秒且未走弱，同时当日量能节奏达到20日全日节奏基准的0.8倍。上述是 Intraday v2 的待验证参数，不是已证明最优规则。开盘窗口耗尽不自动否决盘中模型，结构失效则两者都否决。盘中首次五门通过只记录一次，订单口径仅当日有效，收盘未触发自动作废。</p><h3>成交后研究口径</h3><p>T+1／3／5／10 均指入场后的对应交易日。策略实际固定期限在提前退出后锁定实际净R；反事实路径假设不退出，只用于研究止损后收复与目标后继续上涨。MFE／MAE 由日K高低价估计，同日先后不可知；首次触及日均以T+0为入场日。历史末端不足持有期的TIMEOUT属于右删失，不得当作已完成交易。</p><h3>前向证据与版本簇</h3><p>严格纯前向同时要求 recordOrigin=PRE_ENTRY、savedAt 存在、dataAsOf=triggerDate，并在同一策略版本与交易模型参数簇内按经济信号去重。扫描数量不属于交易模型参数；页面展示升级不重置策略簇，旧档案缺少策略版本时按 legacy:页面版本隔离。不同策略版本不混合计算绩效；全量跨版本档案只用于审计和导出。</p><h3>高周期压力</h3><p>只使用触发日前已经完成的周线和月线摆动高点，当前未完成周/月不参与。若最近高周期压力位于原第一目标之前，则将第一目标收缩到该压力并重算净赔率；日线是否触发不由高周期压力反向改写。</p><h3>验证边界</h3><p>页面内回放是当前加载池上的探索性研究，不含完整历史股票池、退市样本、滚动样本外、净化隔离和多重试验校正；也未建立组合级并发持仓、资金占用或权益曲线。停牌缺口与逐笔流动性无法由日K完整还原，一字跌停只是保守成交约束，不等于完整市场冲击模型。样本少于30笔显示“样本不足”；达到30笔也不自动等于稳定规律。回放与 v10.2 起新建前向记录覆盖原信号有效期内的回区开盘；旧前向记录仍按原单次口径结算，不混写。</p>
+<h3>信号生命周期与失效口径</h3><p>等待期间任何完成日K收盘触及失效锚点即判"结构失效"，不再于破位日开盘补入场，取消全部剩余窗口；盘中报价低点穿透冻结止损时，开盘与盘中两个执行模型同步失效（v13.5 起统一口径，此前存在止损穿透后状态机不结算的漏洞）。开盘窗口耗尽只代表开盘价不合格，不自动否决独立盘中模型。</p>
+<h3>双执行模型与当日生命周期</h3><p>开盘研究模型继续按实际开盘价检查，突破1次、超跌2次，用于和既有历史回放保持可比。盘中执行模型独立运行：盘前不生成隔夜挂单；连续竞价时，报价不得超过180秒；五门在信号年龄 ≤2 个交易日内开放，开盘模型判废当日即执行、不跨日排队，年龄 ≥1 日时价格须落在冻结入场区 ±1% 的漂移护栏内；超跌还须先测试入场区下沿后收复；至少2次连续区内有效报价，间隔45～600秒且未走弱，同时当日量能节奏达到20日全日节奏基准的0.8倍。上述是 Intraday v2 的待验证参数，不是已证明最优规则。开盘窗口耗尽不自动否决盘中模型，结构失效则两者都否决。盘中首次五门通过只记录一次，订单口径仅当日有效，收盘未触发自动作废。</p><h3>成交后研究口径</h3><p>T+1／3／5／10 均指入场后的对应交易日。策略实际固定期限在提前退出后锁定实际净R；反事实路径假设不退出，只用于研究止损后收复与目标后继续上涨。MFE／MAE 由日K高低价估计，同日先后不可知；首次触及日均以T+0为入场日。历史末端不足持有期的TIMEOUT属于右删失，不得当作已完成交易。</p><h3>前向证据与版本簇</h3><p>严格纯前向同时要求 recordOrigin=PRE_ENTRY、savedAt 存在、dataAsOf=triggerDate，并在同一策略版本与交易模型参数簇内按经济信号去重。扫描数量不属于交易模型参数；页面展示升级不重置策略簇，旧档案缺少策略版本时按 legacy:页面版本隔离。不同策略版本不混合计算绩效；全量跨版本档案只用于审计和导出。观察样本表展示模型成本／现价／浮动盈亏，仅为模型口径，不代表账户实际成交。</p><h3>高周期压力</h3><p>只使用触发日前已经完成的周线和月线摆动高点，当前未完成周/月不参与。若最近高周期压力位于原第一目标之前，则将第一目标收缩到该压力并重算净赔率；日线是否触发不由高周期压力反向改写。</p><h3>验证边界</h3><p>页面内回放是当前加载池上的探索性研究，不含完整历史股票池、退市样本、滚动样本外、净化隔离和多重试验校正；也未建立组合级并发持仓、资金占用或权益曲线。停牌缺口与逐笔流动性无法由日K完整还原，一字跌停只是保守成交约束，不等于完整市场冲击模型。样本少于30笔显示“样本不足”；达到30笔也不自动等于稳定规律。回放与 v10.2 起新建前向记录覆盖原信号有效期内的回区开盘；旧前向记录仍按原单次口径结算，不混写。</p>
 <h3>交易日一致性</h3><p>参考基准先并行核验多源完成日K与报价交易日，采用可佐证的最新完成日；多源冲突无法裁决或市场级陈旧时，整市场停止生成信号。个股最近完成日K必须与该基准一致，不一致时继续降级数据源，仍不一致则列为数据异常。缓存同样接受交易日复核，不以旧基准反向锁死新数据。</p><h3>规则插件契约（v13.0 起）</h3>
 <p>quant-rules.js 掌管 DEFAULTS、三通道参数、排除名单与页面/策略版本；window.QuantRules 数组承载插件规则，按 RULE_MANIFEST 登记顺序在触发判定时执行：gates(ctx) 返回 true 通过、返回字符串即否决（记入拒绝原因，不可由高分或价格抵消）；scoreAdjust(q, ctx) 对 Q 做有界加减（0~100）；params 为预留声明。ctx 含 channel/code/market/config/metrics/geometry/features/Q。规则文件缺载、契约不符或 id 重复时页面红字告警并停止启动；规则执行异常按否决处理，appliedRules/ruleGate 随信号留痕。回放 Worker 使用同一套 rules＋core＋插件规则，实时与回放口径一致。</p>
 <details class="version-history"><summary><span><b>历史版本与变更审计</b><small>完整记录移至 quant-versions.html；本页保留方法边界与最近版本</small></span></summary><div class="version-history-body">
+<h3>v13.5 生命周期止损穿透结算与显示口径统一 · 2026-11-03</h3>
+<ol><li>P0：修复信号生命周期对止损穿透不结算——完成日K收盘已破位时不再允许同日开盘补入场，直接判"已失效·结构失效"；盘中报价低点穿透冻结止损时，开盘与盘中两个执行模型同步失效。前向结算的开盘窗口检查同一口径。属行为级修复，按版本纪律策略升级为 OPENING_DAILY_V4，旧档案按 legacy 簇隔离不删除（紫金 10-30、外运 11-02 实锤案例）。</li><li>P1：净赔率显示口径默认整区最优，现价口径降为副行，消除"现价 10.82∶1／整区 3.77∶1"式误导（恒瑞案例）；信号表净赔率列同步显示整区最优。</li><li>P1：止损距离低于 0.8 ATR 展示"赔率虚高"警示（0.5 ATR 硬拒绝不变，不新增门槛）。</li><li>P1：ATR 距离统一从同一函数取数并显式标注测量基准（现价／入场区下沿），消除黄金ETF案例中不同入口口径不一的问题。</li><li>P2：全部观察样本表新增三列：模型成本／现价／浮动盈亏（仅模型口径，非账户实际成交；未成交样本显示"—"，现价仅对已加载标的有效）。</li><li>内核自测新增 2 项回归测试（破位日不补入场、盘中低点穿透同步失效），合计 96 项。</li></ol>
 <h3>v13.4 盘中五门开放性与计数口径 · 2026-11-02</h3>
 <ol><li>P0：开盘模型判废后当天立即开放盘中五门，取消"等待下一交易日"的跨日排队；只有报价日期早于触发日才判数据错位。</li><li>P0：五门信号年龄统一放宽至 ≤2 个交易日；年龄 ≥1 时价格须落在冻结入场区 ±1% 以内（防漂移护栏，护栏随年龄归零自动恢复严格区）。</li><li>P1：开盘窗口计数口径统一：余窗＝总窗−已检，不再出现"1/2 余 0"；结构失效时明示"开盘窗已关闭·结构失效"而非伪计数。</li><li>P2：盘中五门新增进度提示"五门进度 a/7｜距触发还差：××"，未通过的门逐项列出，排错不再靠猜。</li><li>盘中执行模型升级 INTRADAY_V2，与 V1 历史档案分列不混算；页面小版本 v13.4，开盘日线策略仍为 OPENING_DAILY_V3。</li></ol>
 <h3>v13.3 信号质量修正 · 2026-11-02</h3>
@@ -66,16 +69,16 @@
 <ol><li>修复高周期压力识别系统性漏识别：A股日K由320根延长为520根（约25个月），周线窗口扩至52周、月线扩至24组，更早的已确认摆动高点可被识别并正确收缩第一目标与净赔率（实证：招商银行2025-07高点46.06）。</li><li>新增对称的止损距离预筛：以入场区下沿预检0.5～2.5 ATR硬区间，不合格者与赔率不足同等默认退出主列表（实证：黄金ETF止损0.34 ATR、虚高赔率7.14∶1）。</li><li>页头版本号修正；缓存命名空间随版本自动取值；按版本纪律策略升级为 OPENING_DAILY_V2。</li></ol>
 <p class="small muted">更早版本（v13.0 ～ v10.0-rc.1，含全部修复细节）见 <a href="quant-versions.html">quant-versions.html · 完整历史版本与变更审计</a>，与本页同目录部署。</p>
 </div></details></section>
-<footer class="footer"><span>Quant v13.4 · Score v0 / Opening Daily V3 / Intraday V2 · 模块化（rules/core/data/journal/ui/main）· 数据与结论均需在决策前复核</span><span>公开行情研究工具，不构成收益承诺</span></footer>
+<footer class="footer"><span>Quant v13.5 · Score v0 / Opening Daily V4 / Intraday V2 · 模块化（rules/core/data/journal/ui/main）· 数据与结论均需在决策前复核</span><span>公开行情研究工具，不构成收益承诺</span></footer>
 </main>
 <dialog id="watchDialog" aria-labelledby="watchTitle"><div class="dialog-head"><h2 id="watchTitle">研究池与扫描</h2><button class="ghost" data-close="watchDialog" type="button">关闭</button></div><div class="dialog-body"><div class="pool-scan"><p>全A深扫会替换当前结果集；研究池清单不变。扫描数量上限在模型设置中调整。</p><button class="ghost" id="scanBtn" type="button">全A初筛深扫</button></div><div class="add-grid"><input id="addSymbol" type="search" placeholder="名称 / 代码：茅台、600519、DRAM、科磊、KLAC、usNVDA" aria-label="添加代码"><button class="primary" id="addBtn" type="button">校验并添加</button></div><div id="searchResults" class="search-results"></div><p class="small muted" style="margin:12px 0">研究池仅保存在此浏览器；清除浏览器数据会丢失。默认池用于跨行业参考，与任何账户持仓无关。</p><div id="watchList"></div></div><div class="dialog-actions"><button class="ghost" id="settingsBtn" type="button">模型设置</button><button class="ghost" id="exportBtn" type="button">导出研究池</button><button class="ghost" id="importBtn" type="button">导入</button><input id="importFile" class="hidden" type="file" accept="application/json,.json"><button class="ghost danger" id="resetBtn" type="button">恢复默认</button></div></dialog>
 <dialog id="settingsDialog" aria-labelledby="settingsTitle"><div class="dialog-head"><h2 id="settingsTitle">客观模型设置</h2><button class="ghost" data-close="settingsDialog" type="button">关闭</button></div><div class="dialog-body"><div class="settings-grid"><div class="field"><label for="setMinRR">正常候选最低净赔率</label><input id="setMinRR" type="number" min="1" max="5" step="0.1" value="1.5"></div><div class="field"><label for="setDeepLimit">全A深扫数量上限</label><select id="setDeepLimit"><option>30</option><option selected>60</option><option>120</option></select></div><div class="field"><label for="setMinAmountA">A股20日均成交额门槛（万元）</label><input id="setMinAmountA" type="number" min="0" step="1000" value="5000"></div><div class="field"><label for="setMinAmountUS">美股20日均成交额门槛（万美元）</label><input id="setMinAmountUS" type="number" min="0" step="100" value="500"></div></div><div class="auto-setting"><div class="field"><label for="setAutoMinutes">自动刷新间隔</label><select id="setAutoMinutes"><option value="1">1分钟</option><option value="5" selected>5分钟</option><option value="10">10分钟</option></select></div><button class="ghost" id="autoBtn" type="button" aria-pressed="false">自动：关</button></div><p class="small muted" style="margin-top:14px">设置只改变客观研究口径，不代表任何账户纪律。自动刷新只在页面可见且空闲时运行；回放期间跳过。修改后重新刷新信号。</p></div><div class="dialog-actions"><button class="primary" id="saveSettings" type="button">保存设置</button></div></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script src="quant-rules.js?v=13.4"></script>
-<script src="quant-core.js?v=13.4"></script>
-<script src="quant-data.js?v=13.4"></script>
-<script src="quant-journal.js?v=13.4"></script>
-<script src="quant-ui.js?v=13.4"></script>
-<script src="quant-main.js?v=13.4"></script>
+<script src="quant-rules.js?v=13.5"></script>
+<script src="quant-core.js?v=13.5"></script>
+<script src="quant-data.js?v=13.5"></script>
+<script src="quant-journal.js?v=13.5"></script>
+<script src="quant-ui.js?v=13.5"></script>
+<script src="quant-main.js?v=13.5"></script>
 </body>
 </html>

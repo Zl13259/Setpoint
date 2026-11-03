@@ -1,17 +1,17 @@
-/* Quant v13.4 · 规则与参数中心（quant-rules.js）
+/* Quant v13.5 · 规则与参数中心（quant-rules.js）
    改规则只动这里（参数），或新建 rule-*.js 插件（否决门/评分修正），
    再到 quant-main.js 的 RULE_MANIFEST 加一行引用即可，内核不动。
 
    版本纪律：
    ① 改本文件任何数值 → VERSION 的小版本 +1，并同步 quant*.html 里的 ?v= 引用；
    ② 改变信号行为（而非纯展示）→ STRATEGY_VERSION 必须升级（前向记录按策略版本隔离）；
-   ③ 当前数值与 v13.3 一致；开盘日线策略仍为 OPENING_DAILY_V3；
-      v13.4 起盘中执行模型升级 INTRADAY_V2（判废当日开放五门、信号年龄≤2、±1% 漂移护栏），与 V1 档案分列不混算。
+   ③ 当前数值与 v13.3 一致；开盘日线策略 v13.5 起为 OPENING_DAILY_V4（信号生命周期止损穿透口径修复，属行为级修复）；
+      盘中执行模型仍为 INTRADAY_V2，与 V1 档案分列不混算。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v13.4",
-  STRATEGY_VERSION: "OPENING_DAILY_V3",
+  VERSION: "v13.5",
+  STRATEGY_VERSION: "OPENING_DAILY_V4",
   DEFAULTS: {
     minBars: 80,
     minAmountA: 5e7,
