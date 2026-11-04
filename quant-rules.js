@@ -1,4 +1,4 @@
-/* Quant v14.0 · 规则与参数中心（quant-rules.js）
+/* Quant v14.1 · 规则与参数中心（quant-rules.js）
    改规则只动这里（参数），或新建 rule-*.js 插件（否决门/评分修正），
    再到 quant-main.js 的 RULE_MANIFEST 加一行引用即可，内核不动。
 
@@ -7,10 +7,14 @@
    ② 改变信号行为（而非纯展示）→ STRATEGY_VERSION 必须升级（前向记录按策略版本隔离）；
    ③ v14.0 起：新增盘中触发型超跌反弹（行为级，策略升级 OPENING_DAILY_V5）；突破通道有效期 2→3；
       盘中确认窗口 600→1800 秒、确认样本有效期 60 分钟；盘中执行模型仍为 INTRADAY_V2（触发来源分列），与 V1 档案不混算。
+   ④ v14.1（数据修复，不改判定逻辑）：A股日K源顺序回退为 东财→腾讯→新浪（前复权确认源优先，
+      新浪不复权口径仅作兜底），消除 v14.0 新浪优先造成的压力位/RSI/ATR 漂移与同票两版信号不一致
+      （实证：伊利、亿纬锂能入场区与触发日双版对不上）；沿用 v14.0 对"源顺序调整"的口径处理，
+      策略版本维持 OPENING_DAILY_V5。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v14.0",
+  VERSION: "v14.1",
   STRATEGY_VERSION: "OPENING_DAILY_V5",
   DEFAULTS: {
     minBars: 80,

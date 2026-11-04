@@ -1,4 +1,4 @@
-/* Quant v14.0 · quant-data.js
+/* Quant v14.1 · quant-data.js
    数据适配层：东财/腾讯/新浪 报价、日K、搜索、缓存。被 quant-main.js 启动流程调用；不直接操作判定。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -439,10 +439,12 @@ async function loadKline(code, force = false, expectedDate = null) {
       const cached = readCache(code, expectedDate);
       if (cached) return cached;
     }
+    // v14.1：A股回退为 东财→腾讯→新浪。东财(fqt=1)/腾讯(qfq)为已确认前复权口径，
+    // 新浪(CN_MarketDataService)为不复权、仅作兜底——消除 v14.0 新浪优先造成的信号漂移。
     const chain = isUS(code)
       ? [klineSina, klineTX, klineEM]
-      : [klineSina, klineEM, klineTX],
-      names = isUS(code) ? ["新浪", "腾讯", "东财"] : ["新浪", "东财", "腾讯"],
+      : [klineEM, klineTX, klineSina],
+      names = isUS(code) ? ["新浪", "腾讯", "东财"] : ["东财", "腾讯", "新浪"],
       errors = [];
     for (let i = 0; i < chain.length; i++) {
       try {

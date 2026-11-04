@@ -1,4 +1,4 @@
-/* Quant v14.0 objective signal and intraday execution core. No DOM, storage, network or account rules.
+/* Quant v14.1 objective signal and intraday execution core. No DOM, storage, network or account rules.
    纯内核：参数/通道/排除名单来自 globalThis.QRULES（quant-rules.js），插件规则来自 globalThis.QuantRules。 */
 const QuantCore = (() => {
   "use strict";
@@ -1185,7 +1185,9 @@ const QuantCore = (() => {
         high: Math.max(finite(quote.high) ? +quote.high : price, price),
         low: Math.min(finite(quote.low) && +quote.low > 0 ? +quote.low : price, price),
         close: price,
-        volume: finite(quote.volume) ? +quote.volume : 0,
+        // v14.1 修复：A股报价量为"手"、日K量为"股"，虚拟K线须×100——否则量能萎缩100倍，
+        // volContraction 恒真（企稳质量分虚增+30）、volRatio 失真，污染盘中触发的 Q 评分。
+        volume: finite(quote.volume) ? +quote.volume * (market === "A" ? 100 : 1) : 0,
         amount: finite(quote.amount) ? +quote.amount : null,
       },
       f = features(completed.concat([vb])),
