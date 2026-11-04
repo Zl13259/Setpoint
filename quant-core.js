@@ -3103,6 +3103,24 @@ const QuantCore = (() => {
         r.geometry.valid && r.geometry.stop > 0 && r.geometry.stop < 8.9 &&
         r.Q && Number.isFinite(r.Q.value);
     });
+    test("A股盘中触发虚拟K线量单位手→股回归", () => {
+      const mk = () => {
+          const out = [], d0 = Date.parse("2026-01-01T00:00:00Z"),
+            push = (close, o, h, l) => {
+              out.push({
+                date: new Date(d0 + out.length * 864e5).toISOString().slice(0, 10),
+                open: o, high: h, low: l, close, volume: 1e6, amount: close * 1e6,
+              });
+            };
+          for (let i = 0; i < 76; i++) push(10 + 0.03 * Math.sin(i * 1.3), 10, 10.06, 9.94);
+          push(8.6, 9.9, 9.95, 8.55);
+          push(8.65, 8.6, 8.7, 8.57); push(8.7, 8.65, 8.75, 8.6); push(8.68, 8.7, 8.72, 8.6);
+          return out;
+        },
+        now = new Date("2026-10-28T02:00:00Z"),
+        r = intradayOversoldPlan(mk(), { price: 9.3, open: 8.7, high: 9.35, low: 8.6, volume: 1e4, qtime: now.getTime() }, DEFAULTS, "A", now);
+      return r && r.metrics.volContraction === false && Math.abs(r.metrics.volRatio - 1) < 0.05;
+    });
     test("盘中触发只面向阶段①/②且限盘中会话", () => {
       const now = new Date("2026-10-28T14:00:00Z"),
         flat = intradayOversoldPlan(makeSynthetic(140), { price: 20, open: 20, high: 20, low: 20, qtime: now.getTime() }, DEFAULTS, "US", now),
