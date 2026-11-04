@@ -1,4 +1,4 @@
-/* Quant v13.5 objective signal and intraday execution core. No DOM, storage, network or account rules.
+/* Quant v14.0 objective signal and intraday execution core. No DOM, storage, network or account rules.
    纯内核：参数/通道/排除名单来自 globalThis.QRULES（quant-rules.js），插件规则来自 globalThis.QuantRules。 */
 const QuantCore = (() => {
   "use strict";
@@ -16,7 +16,8 @@ const QuantCore = (() => {
     intradayQuoteMaxAgeSec: 180,
     intradayConfirmSamples: 2,
     intradayMinSampleGapSec: 45,
-    intradayConfirmWindowSec: 600,
+    intradayConfirmWindowSec: 1800,
+    intradaySampleMaxAgeSec: 3600,
     intradayMinVolumePace: 0.8,
     minStopAtr: 0.5,
     maxStopAtr: 2.5,
@@ -1111,8 +1112,9 @@ const QuantCore = (() => {
       totalMinutes = market === "A" ? 240 : 390,
       elapsed = simulated ? totalMinutes : sessionElapsedMinutes(market, quoteZ),
       averageAmount20 = validPositive(o.averageAmount20) ? +o.averageAmount20 : null,
+      dayFrac = Math.max(1, elapsed) / totalMinutes,
       volumePace = averageAmount20 && finite(quote.amount) && quote.amount !== null && quote.amount !== undefined && elapsed > 0
-        ? (+quote.amount / Math.max(5, elapsed)) / (averageAmount20 / totalMinutes) : null,
+        ? +quote.amount / (averageAmount20 * Math.min(1, dayFrac + 0.13 * Math.sin(Math.PI * dayFrac))) : null,
       volumePass = Number.isFinite(volumePace) && volumePace >= cfg.intradayMinVolumePace;
     check("structure", "结构有效", structurePass, structurePass ? "现价与日内低点未触及冻结止损" : "日内已触及冻结失效锚点");
     check("zone", "价格在冻结入场区", inZone, `${round(price, 4)} / ${round(zoneLoEff, 4)}～${round(zoneHiEff, 4)}${driftNote}`);
@@ -1123,7 +1125,9 @@ const QuantCore = (() => {
 
     const rawSamples = Array.isArray(o.samples) ? o.samples.slice() : [],
       samples = rawSamples.filter((x) => x && finite(x.price) && +x.price > 0 && finite(x.qtime) &&
-        tzInfo(new Date(+x.qtime), zone).day === quoteDay && +x.qtime <= now.getTime() + 5 * 60e3)
+        tzInfo(new Date(+x.qtime), zone).day === quoteDay &&
+        +x.qtime >= now.getTime() - (cfg.intradaySampleMaxAgeSec || 3600) * 1000 &&
+        +x.qtime <= now.getTime() + 5 * 60e3)
         .sort((a, b) => +a.qtime - +b.qtime),
       required = Math.max(2, Math.round(cfg.intradayConfirmSamples)),
       tail = samples.slice(-required),
@@ -1159,6 +1163,46 @@ const QuantCore = (() => {
     if (simulated)
       return out("SIMULATED", "收盘模拟五门通过｜非盘中不下单", `按最近完成日K收盘 ${round(price, 4)} 模拟：净赔率 ${round(rr, 2)}∶1，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}。仅反映收盘时点的理论状态；实际执行须待连续竞价重新通过五门确认。`, "ok", { ...common, actionable: false });
     return out("ACTIONABLE", "五门通过｜人工限价评估", `现价 ${round(price, 4)}；限价不高于 ${round(g.zoneHi, 4)}，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}，净赔率 ${round(rr, 2)}∶1。仅当日有效；仓位=风险预算÷止损幅度，环境／事件与账户红线另核`, "ok", { ...common, actionable: true });
+  }
+  /* v14.0 盘中触发型超跌反弹：把当前报价合成当日虚拟K线，对阶段①/②的超跌结构实时探测；
+     触发即冻结几何（当日有效），执行前仍走同一套五门；收盘后由 journal 层验票。 */
+  function intradayOversoldPlan(bars, quote, cfg, market, now = new Date()) {
+    const c = { ...DEFAULTS, ...(cfg || {}) };
+    if (!Array.isArray(bars) || bars.length < c.minBars) return null;
+    if (!quote || !finite(quote.price) || +quote.price <= 0 || !finite(quote.qtime)) return null;
+    if (marketSession(market, now).state !== "REGULAR") return null;
+    const zone = market === "A" ? "Asia/Shanghai" : "America/New_York",
+      quoteDay = tzInfo(new Date(+quote.qtime), zone).day;
+    if (quoteDay !== tzInfo(now, zone).day) return null;
+    const completed = completedBars(bars, market, now);
+    if (!completed.length || last(completed).date >= quoteDay) return null;
+    const probe = detectImpl("oversold", features(completed), null);
+    if (!probe || probe.stage < 1 || probe.stage === 3) return null;
+    const price = +quote.price,
+      vb = {
+        date: quoteDay,
+        open: finite(quote.open) && +quote.open > 0 ? +quote.open : price,
+        high: Math.max(finite(quote.high) ? +quote.high : price, price),
+        low: Math.min(finite(quote.low) && +quote.low > 0 ? +quote.low : price, price),
+        close: price,
+        volume: finite(quote.volume) ? +quote.volume : 0,
+        amount: finite(quote.amount) ? +quote.amount : null,
+      },
+      f = features(completed.concat([vb])),
+      s = detectImpl("oversold", f, null);
+    if (!s || s.stage !== 3 || !s.Q) return null;
+    const geometry = netGeometry("oversold", f, s, price, c, price);
+    geometry.entryPrice = price;
+    if (!geometry.valid) return null;
+    return {
+      channel: "oversold",
+      name: CHANNELS.oversold.name,
+      triggerDate: quoteDay,
+      geometry,
+      Q: s.Q,
+      metrics: s.metrics,
+      evidence: s.evidence,
+    };
   }
   function signalLifecycle(o) {
     const market = o.market,
@@ -2834,7 +2878,7 @@ const QuantCore = (() => {
       code: "sh600000", name: "测试", market: "A", now: new Date("2026-10-27T02:00:00Z"), status: "NEXT_SESSION_PLAN",
       primary: { stage: 3, channel: "breakout", age: 0, triggerDate: "2026-10-26", liquidity: { pass: true },
         triggerGeometry: { valid: true, zoneLo: 9, zoneHi: 11, stop: 8, target: 16, atrValue: 1, entryPrice: 10 } },
-      quote: { price: 10.1, qtime: Date.parse("2026-10-27T02:00:00Z"), amount: 3e6, prevClose: 9.8, high: 10.2, low: 9.9 },
+      quote: { price: 10.1, qtime: Date.parse("2026-10-27T02:00:00Z"), amount: 4e6, prevClose: 9.8, high: 10.2, low: 9.9 },
       averageAmount20: 24e6,
       samples: [
         { price: 10, low: 9.8, qtime: Date.parse("2026-10-27T01:58:30Z") },
@@ -3037,6 +3081,39 @@ const QuantCore = (() => {
         !s0.appliedRules.length
       );
     });
+    test("盘中触发型超跌：虚拟K线触发并冻结几何", () => {
+      const mk = () => {
+          const out = [], d0 = Date.parse("2026-01-01T00:00:00Z"),
+            push = (close, o, h, l) => {
+              out.push({
+                date: new Date(d0 + out.length * 864e5).toISOString().slice(0, 10),
+                open: o, high: h, low: l, close, volume: 1e6, amount: close * 1e6,
+              });
+            };
+          for (let i = 0; i < 76; i++) push(10 + 0.03 * Math.sin(i * 1.3), 10, 10.06, 9.94);
+          push(8.6, 9.9, 9.95, 8.55);
+          push(8.65, 8.6, 8.7, 8.57); push(8.7, 8.65, 8.75, 8.6); push(8.68, 8.7, 8.72, 8.6);
+          return out;
+        },
+        now = new Date("2026-10-28T14:00:00Z"),
+        r = intradayOversoldPlan(mk(), { price: 9.3, open: 8.7, high: 9.35, low: 8.6, qtime: now.getTime() }, DEFAULTS, "US", now);
+      return r && r.channel === "oversold" && r.triggerDate === "2026-10-28" &&
+        r.geometry.valid && r.geometry.stop > 0 && r.geometry.stop < 8.9 &&
+        r.Q && Number.isFinite(r.Q.value);
+    });
+    test("盘中触发只面向阶段①/②且限盘中会话", () => {
+      const now = new Date("2026-10-28T14:00:00Z"),
+        flat = intradayOversoldPlan(makeSynthetic(140), { price: 20, open: 20, high: 20, low: 20, qtime: now.getTime() }, DEFAULTS, "US", now),
+        closed = intradayOversoldPlan(makeSynthetic(140), { price: 20, open: 20, high: 20, low: 20, qtime: now.getTime() }, DEFAULTS, "US", new Date("2026-10-25T14:00:00Z"));
+      return flat === null && closed === null;
+    });
+    test("确认样本超过样本有效期不计入确认", () => {
+      const o = intraBase();
+      o.config = { ...DEFAULTS, intradaySampleMaxAgeSec: 60 };
+      o.samples = o.samples.map((x) => ({ ...x, qtime: x.qtime - 90 * 1000 }));
+      const a = intradayAdvice(o);
+      return !a.actionable && a.state === "CONFIRMING" && a.confirmation.count < 2;
+    });
     return tests;
   }
   return {
@@ -3070,6 +3147,7 @@ const QuantCore = (() => {
     marketSession,
     signalLifecycle,
     intradayAdvice,
+    intradayOversoldPlan,
     arbitrateBenchmarkDate,
     openingDecision,
     tzInfo,

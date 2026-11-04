@@ -1,4 +1,4 @@
-/* Quant v13.4 · quant-data.js
+/* Quant v14.0 · quant-data.js
    数据适配层：东财/腾讯/新浪 报价、日K、搜索、缓存。被 quant-main.js 启动流程调用；不直接操作判定。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -441,8 +441,8 @@ async function loadKline(code, force = false, expectedDate = null) {
     }
     const chain = isUS(code)
       ? [klineSina, klineTX, klineEM]
-      : [klineEM, klineTX, klineSina],
-      names = isUS(code) ? ["新浪", "腾讯", "东财"] : ["东财", "腾讯", "新浪"],
+      : [klineSina, klineEM, klineTX],
+      names = isUS(code) ? ["新浪", "腾讯", "东财"] : ["新浪", "东财", "腾讯"],
       errors = [];
     for (let i = 0; i < chain.length; i++) {
       try {

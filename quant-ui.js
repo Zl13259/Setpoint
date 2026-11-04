@@ -1,4 +1,4 @@
-/* Quant v13.5 · quant-ui.js
+/* Quant v14.0 · quant-ui.js
    渲染层：信号台、详情、回放汇总、诊断等全部 DOM 渲染。只读 state，不改判定逻辑。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -81,6 +81,9 @@ function filteredRows() {
     let rows = [...state.rows.values()].filter((r) => !isIndex(r.code));
     if (status !== "ARCHIVED") rows = rows.filter((r) => r.status !== "ARCHIVED");
     if (!["all", "PREFILTERED", "ARCHIVED"].includes(status)) rows = rows.filter((r) => !r.prefiltered);
+    const shadowRow = (r) => r.status === "RESEARCH_ONLY" && r.primary && r.primary.channel === "pullback";
+    if (status === "SHADOW") rows = rows.filter(shadowRow);
+    else rows = rows.filter((r) => !shadowRow(r));
     rows = rows.filter(
       (r) =>
         (!text || (r.name + " " + r.code).toLowerCase().includes(text)) &&
@@ -300,16 +303,35 @@ function currentIntradayKey(r, quoteDay) {
     return C.intradayPlanKey({ code: r.code, primary: r.primary }, quoteDay);
   }
 
-function currentIntraday(r) {
-    const quote = currentQuote(r),
-      zone = r.market === "A" ? "Asia/Shanghai" : "America/New_York",
-      quoteDay = quote.qtime ? C.tzInfo(new Date(quote.qtime), zone).day : null;
-    let primary = r.primary, previewBased = false;
-    if (
-      (!primary || primary.stage !== 3) &&
-      primary && primary.previewGeometry && Number.isFinite(r.price) &&
-      !["DATA_ERROR", "UNSUPPORTED", "INDEX_ONLY", "UNTRADABLE"].includes(r.status)
-    ) {
+/* v14.0：盘中触发型超跌反弹——对阶段①/②的超跌结构用虚拟K线实时探测；触发即冻结几何、
+   走同一套五门，可执行但仅当日有效；收盘后由 journal 验票（确认转正式前向，否决则作废）。
+   结果按 报价时间+价格 缓存，避免每次渲染重复探测。 */
+function resolveIntradayPrimary(r, quote) {
+    let primary = r.primary, previewBased = false, intradayLive = false;
+    if (primary && primary.stage === 3) return { primary, previewBased, intradayLive };
+    const blocked = ["DATA_ERROR", "UNSUPPORTED", "INDEX_ONLY", "UNTRADABLE"].includes(r.status);
+    if (r.__livePlan && r.__livePlan.qtime === quote.qtime && r.__livePlan.price === r.price)
+      return r.__livePlan.result;
+    if (!blocked && Number.isFinite(r.price)) {
+      const live = C.intradayOversoldPlan(state.bars.get(r.code) || [], quote, state.config, r.market);
+      if (live) {
+        primary = {
+          channel: "oversold",
+          name: C.CHANNELS.oversold.name,
+          stage: 3,
+          triggerGeometry: live.geometry,
+          triggerDate: live.triggerDate,
+          triggerQ: live.Q,
+          age: 0,
+          liquidity: { pass: true },
+          reasons: [],
+          expiredReason: null,
+          evidence: live.evidence,
+        };
+        intradayLive = true;
+      }
+    }
+    if (!intradayLive && !blocked && primary && primary.previewGeometry && Number.isFinite(r.price)) {
       // 未触发（阶段①／②）标的：用 v12.6 的预估几何合成临时预案，走同一套五门口径试算。
       // 结果只允许展示，永远不可执行、不建档、不进前向样本。
       primary = {
@@ -324,6 +346,19 @@ function currentIntraday(r) {
       };
       previewBased = true;
     }
+    const result = { primary, previewBased, intradayLive };
+    if (!blocked && quote.qtime && Number.isFinite(r.price))
+      r.__livePlan = { qtime: quote.qtime, price: r.price, result };
+    return result;
+  }
+
+function currentIntraday(r) {
+    const quote = currentQuote(r),
+      zone = r.market === "A" ? "Asia/Shanghai" : "America/New_York",
+      quoteDay = quote.qtime ? C.tzInfo(new Date(quote.qtime), zone).day : null;
+    const resolved = resolveIntradayPrimary(r, quote);
+    let primary = resolved.primary;
+    const previewBased = resolved.previewBased, intradayLive = resolved.intradayLive;
     const key = currentIntradayKey({ ...r, primary }, quoteDay),
       bars = state.bars.get(r.code) || [],
       completed = C.completedBars(bars, r.market, new Date()),
@@ -347,6 +382,11 @@ function currentIntraday(r) {
       if (a.state === "ACTIONABLE") a.state = "SIMULATED";
       a.title = "预估·未触发｜" + a.title;
       a.detail += "；以上为对未触发结构按预估几何进行的五门试算，不构成买点、不建档、不进前向样本。";
+    }
+    if (intradayLive) {
+      a.intradayLive = true;
+      a.title = "盘中触发·待收盘验票｜" + a.title;
+      a.detail += "；v14.0 盘中触发型超跌反弹：仅当日有效，收盘后自动验票（收盘未确认则作废，不计绩效）";
     }
     const record = state.intradayRecords.find((e) => e.planKey === a.planKey && e.version === C.VERSION && e.geometryHash === (r.primary && r.primary.triggerGeometry ? stableHash(r.primary.triggerGeometry) : null));
     a.triggerLogged = !!record;

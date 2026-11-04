@@ -1,4 +1,4 @@
-/* Quant v13.5 · quant-journal.js
+/* Quant v14.0 · quant-journal.js
    留痕层：开盘模型前向、盘中触发档案、localStorage 读写。冻结口径与 quant-core.js 一致。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -8,14 +8,15 @@ function saveIntradaySamples() {
   }
 
 function captureIntradaySample(r) {
-    if (!r.primary || r.primary.stage !== 3 || isIndex(r.code)) return false;
+    const resolvedPrimary = typeof resolveIntradayPrimary === "function" ? resolveIntradayPrimary(r, currentQuote(r)).primary : r.primary;
+    if (!resolvedPrimary || resolvedPrimary.stage !== 3 || isIndex(r.code)) return false;
     const q = currentQuote(r);
     if (!q.qtime || !Number.isFinite(q.price) || q.price <= 0 || C.marketSession(r.market, new Date()).state !== "REGULAR") return false;
     const zone = r.market === "A" ? "Asia/Shanghai" : "America/New_York",
       quoteDay = C.tzInfo(new Date(q.qtime), zone).day,
       today = C.tzInfo(new Date(), zone).day;
     if (quoteDay !== today) return false;
-    const key = currentIntradayKey(r, quoteDay), rows = Array.isArray(state.intradaySamples[key]) ? state.intradaySamples[key] : [],
+    const key = currentIntradayKey({ ...r, primary: resolvedPrimary }, quoteDay), rows = Array.isArray(state.intradaySamples[key]) ? state.intradaySamples[key] : [],
       previous = rows[rows.length - 1];
     if (previous && previous.qtime === q.qtime && previous.price === q.price) return false;
     rows.push({ qtime: q.qtime, price: q.price, low: q.low, high: q.high, amount: q.amount, source: q.source || r.source });
@@ -25,7 +26,7 @@ function captureIntradaySample(r) {
 
 function captureAllIntradaySamples() {
     let changed = false;
-    const cutoff = Date.now() - 36 * 60e3;
+    const cutoff = Date.now() - (C.DEFAULTS.intradaySampleMaxAgeSec || 3600) * 1000;
     for (const [key, rows] of Object.entries(state.intradaySamples)) {
       if (!Array.isArray(rows) || !rows.length || !Number.isFinite(rows[rows.length - 1].qtime) || rows[rows.length - 1].qtime < cutoff) {
         delete state.intradaySamples[key]; changed = true;
@@ -55,7 +56,8 @@ function captureIntradayTriggers() {
     let added = 0;
     for (const r of state.rows.values()) {
       if (isIndex(r.code) || C.marketSession(r.market, new Date()).state !== "REGULAR") continue;
-      const p = r.primary, a = currentIntraday(r);
+      const resolved = resolveIntradayPrimary(r, currentQuote(r)),
+        p = resolved.primary, a = currentIntraday(r);
       if (!a.actionable || !p || !p.triggerGeometry) continue;
       const geometryHash = stableHash(p.triggerGeometry),
         id = [C.VERSION, a.planKey, geometryHash].join("|");
@@ -69,7 +71,7 @@ function captureIntradayTriggers() {
       entries.unshift({
         id, planKey: a.planKey, version: C.VERSION, executionModel: "INTRADAY_V2",
         savedAt: nowIso, firstTriggeredAt: new Date(q.qtime).toISOString(), dataAsOf: r.barsDate || null,
-        recordOrigin: "PRE_ENTRY", done: false, pendingStage: "等待入场日日K完成",
+        recordOrigin: "PRE_ENTRY", triggerOrigin: resolved.intradayLive ? "LIVE_INTRADAY" : "DAILY_PLAN", done: false, pendingStage: "等待入场日日K完成",
         pendingDetail: "模型按首次五门通过报价建档；不代表用户实际成交", nextCheckDate: "入场日完成日K入库后",
         lastCheckedAt: nowIso, lastDataAsOf: r.barsDate || null,
         modelParamsHash: stableHash({ config: canonicalIntradayConfig(cfg) }), geometryHash,
@@ -107,6 +109,19 @@ function updateIntradayJournal() {
         continue;
       }
       e.lastDataAsOf = bars[bars.length - 1].date;
+      if (e.triggerOrigin === "LIVE_INTRADAY" && !e.reconciled && bars.some((b) => b.date === e.executionDate)) {
+        const upto = bars.slice(0, bars.findIndex((b) => b.date === e.executionDate) + 1),
+          daily = C.historicalSetup("oversold", upto, null, e.config || C.DEFAULTS, e.market, e.code);
+        e.reconciled = daily && daily.stage === 3 ? "confirmed" : "void";
+        changed = true;
+        if (e.reconciled === "void") {
+          e.done = true;
+          e.result = { status: "SKIP", reason: "盘中触发未获收盘确认（v14.0 收盘验票作废）" };
+          e.settledAt = nowIso;
+          clearPending(e);
+          continue;
+        }
+      }
       const result = C.executeIntradayTrade(e.signal, e.executionDate, e.entryPrice, bars, e.market, e.config);
       e.pendingResult = result;
       if (result.status === "SKIP" || (result.status === "CLOSED" && result.settled !== false)) {
@@ -123,10 +138,15 @@ function updateIntradayJournal() {
   }
 
 function renderIntradayJournal() {
-    const all = intradayEntries(), s = C.summarizeIntraday(all),
+    const all = intradayEntries(),
+      liveAll = all.filter((e) => e.triggerOrigin === "LIVE_INTRADAY"),
+      liveCount = liveAll.length,
+      liveConfirmed = liveAll.filter((e) => e.reconciled === "confirmed").length,
+      liveVoid = liveAll.filter((e) => e.reconciled === "void").length,
+      s = C.summarizeIntraday(all),
       metric = (label, value) => `<div><span class="small muted">${label}</span><b>${value}</b></div>`,
       dash = (x, d = 2) => Number.isFinite(x) ? fmt(x, d) : "—";
-    $("intradayOutput").innerHTML = `<div class="result-grid">${metric("首次触发快照", s.total)}${metric("已结算 / 待结算", `${s.closed} / ${s.pending}`)}${metric("平均净R", dash(s.avgR, 3))}${metric("Profit factor", Number.isFinite(s.profitFactor) ? pfText(s.profitFactor) : s.profitFactor === Infinity ? "∞" : "—")}</div><div class="notice ${s.closed < 30 ? "" : "info"}">${esc(s.status)}。这是独立 Intraday v2 模型：首次五门通过时按当时报价模拟入场并计成本，不是用户实际成交；与开盘价前向模型绝不混合。</div><p class="small muted">触发保存公开报价、确认样本、Q／E、冻结几何和参数指纹。入场日没有触发后的逐笔路径，因此退出、MFE／MAE只从下一完成日K开始；A股与美股均不利用入场日完整日K倒推当日退出。记录仅保存当前浏览器，最多300条。</p>${all.length ? `<table><thead><tr><th>标的 / 通道</th><th>日线触发 / 盘中触发</th><th>入场 / 净赔率 / 量能</th><th>触发Q/E与盘中E</th><th>状态 / 净R</th><th>确认证据</th></tr></thead><tbody>${all.slice(0, 30).map((e) => `<tr><td>${esc(e.name)}<div class="stock-code">${esc(e.code)}</div></td><td>${esc(C.CHANNELS[e.channel].name)}<div class="small muted">${esc(e.triggerDate)} / ${esc(e.executionDate)}</div></td><td class="num">${dash(e.entryPrice)}<div class="small muted">${dash(e.netRR)}∶1 / ${dash(e.volumePace)}×</div></td><td class="num">${dash(e.Q, 1)} / ${dash(e.E, 1)}<div class="small muted">E盘中 ${dash(e.E_intraday, 1)}</div></td><td>${e.done ? esc(e.result && e.result.reason || "已结束") : esc(e.pendingStage || "待结算")}<div class="num small">${e.done && e.result && Number.isFinite(e.result.R) ? fmt(e.result.R, 3) : "—"}</div></td><td class="small">${e.confirmation ? `${e.confirmation.required}次报价 · 区内 ${e.confirmation.heldZone ? "是" : "否"} · 未走弱 ${e.confirmation.notWeakening ? "是" : "否"}` : "—"}<div class="muted">${esc(e.quote && e.quote.source || "—")} · ${esc(e.firstTriggeredAt || "—")}</div></td></tr>`).join("")}</tbody></table>` : '<div class="empty"><strong>尚无盘中触发记录</strong>盘前预案和单次报价不会建档；只有五门首次全部通过才生成不可变模型快照。</div>'}`;
+    $("intradayOutput").innerHTML = `<div class="result-grid">${metric("首次触发快照", s.total)}${metric("已结算 / 待结算", `${s.closed} / ${s.pending}`)}${metric("平均净R", dash(s.avgR, 3))}${metric("Profit factor", Number.isFinite(s.profitFactor) ? pfText(s.profitFactor) : s.profitFactor === Infinity ? "∞" : "—")}</div><div class="notice ${s.closed < 30 ? "" : "info"}">${esc(s.status)}。这是独立 Intraday v2 模型：首次五门通过时按当时报价模拟入场并计成本，不是用户实际成交；与开盘价前向模型绝不混合。</div><p class="small muted">v14.0 触发来源分列：日线预案触发 ${all.length - liveCount} 条，盘中实时触发 ${liveCount} 条（收盘验票：确认 ${liveConfirmed}／作废 ${liveVoid}）。触发保存公开报价、确认样本、Q／E、冻结几何和参数指纹。入场日没有触发后的逐笔路径，因此退出、MFE／MAE只从下一完成日K开始；A股与美股均不利用入场日完整日K倒推当日退出。记录仅保存当前浏览器，最多300条。</p>${all.length ? `<table><thead><tr><th>标的 / 通道</th><th>日线触发 / 盘中触发</th><th>入场 / 净赔率 / 量能</th><th>触发Q/E与盘中E</th><th>状态 / 净R</th><th>确认证据</th></tr></thead><tbody>${all.slice(0, 30).map((e) => `<tr><td>${esc(e.name)}<div class="stock-code">${esc(e.code)}</div></td><td>${esc(C.CHANNELS[e.channel].name)}<div class="small muted">${esc(e.triggerDate)} / ${esc(e.executionDate)}</div></td><td class="num">${dash(e.entryPrice)}<div class="small muted">${dash(e.netRR)}∶1 / ${dash(e.volumePace)}×</div></td><td class="num">${dash(e.Q, 1)} / ${dash(e.E, 1)}<div class="small muted">E盘中 ${dash(e.E_intraday, 1)}</div></td><td>${e.done ? esc(e.result && e.result.reason || "已结束") : esc(e.pendingStage || "待结算")}<div class="num small">${e.done && e.result && Number.isFinite(e.result.R) ? fmt(e.result.R, 3) : "—"}${e.triggerOrigin === "LIVE_INTRADAY" ? `<div class="small muted">验票：${e.reconciled === "confirmed" ? "收盘确认" : e.reconciled === "void" ? "验票作废" : "待收盘验票"}</div>` : ""}</div></td><td class="small">${e.confirmation ? `${e.confirmation.required}次报价 · 区内 ${e.confirmation.heldZone ? "是" : "否"} · 未走弱 ${e.confirmation.notWeakening ? "是" : "否"}` : "—"}<div class="muted">${esc(e.quote && e.quote.source || "—")} · ${esc(e.firstTriggeredAt || "—")}</div></td></tr>`).join("")}</tbody></table>` : '<div class="empty"><strong>尚无盘中触发记录</strong>盘前预案和单次报价不会建档；只有五门首次全部通过才生成不可变模型快照。</div>'}`;
   }
 
 const FORWARD_KEY = "quant_v10_forward_v1";

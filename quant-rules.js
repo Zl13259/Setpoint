@@ -1,17 +1,17 @@
-/* Quant v13.5 · 规则与参数中心（quant-rules.js）
+/* Quant v14.0 · 规则与参数中心（quant-rules.js）
    改规则只动这里（参数），或新建 rule-*.js 插件（否决门/评分修正），
    再到 quant-main.js 的 RULE_MANIFEST 加一行引用即可，内核不动。
 
    版本纪律：
    ① 改本文件任何数值 → VERSION 的小版本 +1，并同步 quant*.html 里的 ?v= 引用；
    ② 改变信号行为（而非纯展示）→ STRATEGY_VERSION 必须升级（前向记录按策略版本隔离）；
-   ③ 当前数值与 v13.3 一致；开盘日线策略 v13.5 起为 OPENING_DAILY_V4（信号生命周期止损穿透口径修复，属行为级修复）；
-      盘中执行模型仍为 INTRADAY_V2，与 V1 档案分列不混算。
+   ③ v14.0 起：新增盘中触发型超跌反弹（行为级，策略升级 OPENING_DAILY_V5）；突破通道有效期 2→3；
+      盘中确认窗口 600→1800 秒、确认样本有效期 60 分钟；盘中执行模型仍为 INTRADAY_V2（触发来源分列），与 V1 档案不混算。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v13.5",
-  STRATEGY_VERSION: "OPENING_DAILY_V4",
+  VERSION: "v14.0",
+  STRATEGY_VERSION: "OPENING_DAILY_V5",
   DEFAULTS: {
     minBars: 80,
     minAmountA: 5e7,
@@ -23,7 +23,8 @@ globalThis.QRULES = {
     intradayQuoteMaxAgeSec: 180,
     intradayConfirmSamples: 2,
     intradayMinSampleGapSec: 45,
-    intradayConfirmWindowSec: 600,
+    intradayConfirmWindowSec: 1800,
+    intradaySampleMaxAgeSec: 3600,
     intradayMinVolumePace: 0.8,
     minStopAtr: 0.5,
     maxStopAtr: 2.5,
@@ -31,7 +32,7 @@ globalThis.QRULES = {
   CHANNELS: {
     oversold: { name: "超跌反弹", maxAge: 3 },
     pullback: { name: "趋势回踩", maxAge: 3 },
-    breakout: { name: "突破确认", maxAge: 2 },
+    breakout: { name: "突破确认", maxAge: 3 },
   },
   DAILY_EXCLUDED: [
     "usSOXS",
