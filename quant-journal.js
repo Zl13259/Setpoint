@@ -1,4 +1,4 @@
-/* Quant v14.5 · quant-journal.js
+/* Quant v14.6 · quant-journal.js
    留痕层：开盘模型前向、盘中触发档案、localStorage 读写。冻结口径与 quant-core.js 一致。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";

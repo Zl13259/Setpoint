@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Quant v14.5 客观信号与盘中执行台（模块化：规则外置＋插件挂钩）：A股日K源回退前复权确认源、盘中触发型超跌反弹、策略版本独立、前向捕获链、分组审计与稳健性诊断。">
+<meta name="description" content="Quant v14.6 客观信号与盘中执行台（模块化：规则外置＋插件挂钩）：A股日K源回退前复权确认源、盘中触发型超跌反弹、策略版本独立、前向捕获链、分组审计与稳健性诊断。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%2312141f'/%3E%3Cpath d='M8 21V11h8a5 5 0 0 1 0 10h-3v4H8zm5-7v4h3a2 2 0 0 0 0-4h-3z' fill='%23f6f6f4'/%3E%3C/svg%3E">
-<title>Quant v14.5 · 客观信号与盘中执行台（模块化）</title>
-<link rel="stylesheet" href="quant.css?v=14.5">
+<title>Quant v14.6 · 客观信号与盘中执行台（模块化）</title>
+<link rel="stylesheet" href="quant.css?v=14.6">
 </head>
 <body>
 <div id="fatal" class="notice" style="display:none;position:sticky;top:0;z-index:99;margin:0;border-radius:0"></div>
 <header class="mast">
 <div class="mast-main">
-<div class="brand"><div><h1>Quant <span class="num">v14.5</span></h1><p>客观信号与盘中执行台</p></div></div>
+<div class="brand"><div><h1>Quant <span class="num">v14.6</span></h1><p>客观信号与盘中执行台</p></div></div>
 <div class="mast-actions"><button class="secondary" id="manageBtn" type="button">研究池与设置</button><button class="primary" id="refreshBtn" type="button">刷新信号</button></div>
 </div>
 <nav class="tabs" role="tablist" aria-label="研究视图">
@@ -57,6 +57,8 @@
 <h3>交易日一致性</h3><p>参考基准先并行核验多源完成日K与报价交易日，采用可佐证的最新完成日；多源冲突无法裁决或市场级陈旧时，整市场停止生成信号。个股最近完成日K必须与该基准一致，不一致时继续降级数据源，仍不一致则列为数据异常。缓存同样接受交易日复核，不以旧基准反向锁死新数据。</p><h3>规则插件契约（v13.0 起）</h3>
 <p>quant-rules.js 掌管 DEFAULTS、三通道参数、排除名单与页面/策略版本；window.QuantRules 数组承载插件规则，按 RULE_MANIFEST 登记顺序在触发判定时执行：gates(ctx) 返回 true 通过、返回字符串即否决（记入拒绝原因，不可由高分或价格抵消）；scoreAdjust(q, ctx) 对 Q 做有界加减（0~100）；params 为预留声明。ctx 含 channel/code/market/config/metrics/geometry/features/Q。规则文件缺载、契约不符或 id 重复时页面红字告警并停止启动；规则执行异常按否决处理，appliedRules/ruleGate 随信号留痕。回放 Worker 使用同一套 rules＋core＋插件规则，实时与回放口径一致。</p>
 <details class="version-history"><summary><span><b>历史版本与变更审计</b><small>完整记录移至 quant-versions.html；本页保留方法边界与最近版本</small></span></summary><div class="version-history-body">
+<h3>v14.6 工程加固：研究池 0/0 故障自愈（不改信号行为） · 2026-11-06</h3>
+<ol><li>P0：修复"研究池 0/0"故障类——历史 localStorage 中指数标志若以字符串 "0"/"1" 持久化，旧写法的真值判断会把 "0" 当指数，整池 37 项被过滤为 0 只标的（基准为硬编码加载不受影响，故外部表现为"基准正常、研究池恒 0/0"）。修复：标志位只认数字 1/布尔 true；过滤后为空时自动恢复默认研究池并显式日志/提示，不允许静默存在。</li><li>P1：防御纵深——渲染层与开盘/盘中台账调用逐个 try/catch 容错，单层故障不再中断整个刷新流程；"覆盖指示器"在加载中显示"加载中…"，与"0/0 异常"明确区分。</li><li>判定逻辑、DEFAULTS、策略版本均未动（维持 OPENING_DAILY_V7 / INTRADAY_V4），前向档案延续同一参数簇。</li></ol>
 <h3>v14.5 超跌通道放宽＋外部评审采纳（行为级） · 2026-11-05</h3>
 <ol><li>P0（Monte Carlo 40万评估点诊断）：62% 的②阶段候选死于"未收复MA5"、38% 死于"K线强度不足"——新增 RSI 恢复触发器（事件日 RSI≤30 → 回升≥40 且收复事件日收盘，不要求站上 MA5）；事件窗口 10→15 完成日；新低缓冲 0.2→0.3 ATR、企稳量 1.1→1.25、下影 1.5→1.2 全部参数化。</li><li>P0（评审采纳）：企稳分级阈值 2.0/1.0→4.0/2.0（原档位名存实亡，凡像样大跌都要求 3 根企稳）；突破量能门槛 1.2→1.1 参数化为 breakoutMinVolRatio（原硬编码杀掉 45.7% 价格突破）；突破入场区上沿 0.35→0.5 ATR 参数化为 breakoutZoneHiAtr——评审建议 +0.8~1.0，但上沿过宽会系统性压垮净赔率门槛（目标价为压力+基底高度，入场越追 RR 越低），取折中；三通道开盘窗口 2→3 次（maxAge 3→4）；盘中确认间隔 45→30 秒、确认窗口 1800→3600 秒。</li><li>P1：净赔率门槛按通道分级（channelMinRR：超跌 1.2、突破/回踩 1.5），预筛/开盘判定/盘中七门/回放统一走同一函数；signal 快照补记 channel 字段，旧档案缺省按全局 minRR 结算（与旧行为一致）。</li><li>P2：8 项自测按 3 窗口语义重写；新增 2 项回归自测（RSI 恢复触发、通道级门槛），内核自测 91 项。STRATEGY_VERSION 升 OPENING_DAILY_V7、盘中模型升 INTRADAY_V4；旧档案按参数指纹与 legacy 簇自动隔离，不删除。提醒：放松后须观察前向档案 VOID 率与未成交漏斗——触发变多若是在选中噪声，比不触发更糟。</li></ol>
 <h3>v14.4 死代码清理（不改信号行为） · 2026-11-05</h3>
@@ -81,16 +83,16 @@
 <ol><li>修复高周期压力识别系统性漏识别：A股日K由320根延长为520根（约25个月），周线窗口扩至52周、月线扩至24组，更早的已确认摆动高点可被识别并正确收缩第一目标与净赔率（实证：招商银行2025-07高点46.06）。</li><li>新增对称的止损距离预筛：以入场区下沿预检0.5～2.5 ATR硬区间，不合格者与赔率不足同等默认退出主列表（实证：黄金ETF止损0.34 ATR、虚高赔率7.14∶1）。</li><li>页头版本号修正；缓存命名空间随版本自动取值；按版本纪律策略升级为 OPENING_DAILY_V2。</li></ol>
 <p class="small muted">更早版本（v13.0 ～ v10.0-rc.1，含全部修复细节）见 <a href="quant-versions.html">quant-versions.html · 完整历史版本与变更审计</a>，与本页同目录部署。</p>
 </div></details></section>
-<footer class="footer"><span>Quant v14.5 · Score v0 / Opening Daily V7 / Intraday V4＋盘中触发 · 模块化（rules/core/data/journal/ui/main）· 数据与结论均需在决策前复核</span><span>公开行情研究工具，不构成收益承诺</span></footer>
+<footer class="footer"><span>Quant v14.6 · Score v0 / Opening Daily V7 / Intraday V4＋盘中触发 · 模块化（rules/core/data/journal/ui/main）· 数据与结论均需在决策前复核</span><span>公开行情研究工具，不构成收益承诺</span></footer>
 </main>
 <dialog id="watchDialog" aria-labelledby="watchTitle"><div class="dialog-head"><h2 id="watchTitle">研究池与扫描</h2><button class="ghost" data-close="watchDialog" type="button">关闭</button></div><div class="dialog-body"><div class="pool-scan"><p>全A深扫会替换当前结果集；研究池清单不变。扫描数量上限在模型设置中调整。</p><button class="ghost" id="scanBtn" type="button">全A初筛深扫</button></div><div class="add-grid"><input id="addSymbol" type="search" placeholder="名称 / 代码：茅台、600519、DRAM、科磊、KLAC、usNVDA" aria-label="添加代码"><button class="primary" id="addBtn" type="button">校验并添加</button></div><div id="searchResults" class="search-results"></div><p class="small muted" style="margin:12px 0">研究池仅保存在此浏览器；清除浏览器数据会丢失。默认池用于跨行业参考，与任何账户持仓无关。</p><div id="watchList"></div></div><div class="dialog-actions"><button class="ghost" id="settingsBtn" type="button">模型设置</button><button class="ghost" id="exportBtn" type="button">导出研究池</button><button class="ghost" id="importBtn" type="button">导入</button><input id="importFile" class="hidden" type="file" accept="application/json,.json"><button class="ghost danger" id="resetBtn" type="button">恢复默认</button></div></dialog>
 <dialog id="settingsDialog" aria-labelledby="settingsTitle"><div class="dialog-head"><h2 id="settingsTitle">客观模型设置</h2><button class="ghost" data-close="settingsDialog" type="button">关闭</button></div><div class="dialog-body"><div class="settings-grid"><div class="field"><label for="setMinRR">正常候选最低净赔率</label><input id="setMinRR" type="number" min="1" max="5" step="0.1" value="1.5"></div><div class="field"><label for="setDeepLimit">全A深扫数量上限</label><select id="setDeepLimit"><option>30</option><option selected>60</option><option>120</option></select></div><div class="field"><label for="setMinAmountA">A股20日均成交额门槛（万元）</label><input id="setMinAmountA" type="number" min="0" step="1000" value="5000"></div><div class="field"><label for="setMinAmountUS">美股20日均成交额门槛（万美元）</label><input id="setMinAmountUS" type="number" min="0" step="100" value="500"></div></div><div class="auto-setting"><div class="field"><label for="setAutoMinutes">自动刷新间隔</label><select id="setAutoMinutes"><option value="1">1分钟</option><option value="5" selected>5分钟</option><option value="10">10分钟</option></select></div><button class="ghost" id="autoBtn" type="button" aria-pressed="false">自动：关</button></div><p class="small muted" style="margin-top:14px">设置只改变客观研究口径，不代表任何账户纪律。自动刷新只在页面可见且空闲时运行；回放期间跳过。修改后重新刷新信号。</p></div><div class="dialog-actions"><button class="primary" id="saveSettings" type="button">保存设置</button></div></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script src="quant-rules.js?v=14.5"></script>
-<script src="quant-core.js?v=14.5"></script>
-<script src="quant-data.js?v=14.5"></script>
-<script src="quant-journal.js?v=14.5"></script>
-<script src="quant-ui.js?v=14.5"></script>
-<script src="quant-main.js?v=14.5"></script>
+<script src="quant-rules.js?v=14.6"></script>
+<script src="quant-core.js?v=14.6"></script>
+<script src="quant-data.js?v=14.6"></script>
+<script src="quant-journal.js?v=14.6"></script>
+<script src="quant-ui.js?v=14.6"></script>
+<script src="quant-main.js?v=14.6"></script>
 </body>
 </html>

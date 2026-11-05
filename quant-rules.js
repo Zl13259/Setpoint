@@ -1,4 +1,4 @@
-/* Quant v14.5 · 规则与参数中心（quant-rules.js）
+/* Quant v14.6 · 规则与参数中心（quant-rules.js）
    改规则只动这里（参数），或新建 rule-*.js 插件（否决门/评分修正），
    再到 quant-main.js 的 RULE_MANIFEST 加一行引用即可，内核不动。
 
@@ -34,10 +34,15 @@
       参数化 breakoutMinVolRatio；突破入场区上沿 0.35→0.5 ATR 参数化 breakoutZoneHiAtr（评审建议
       +0.8~1.0，但上沿过宽会系统性压垮净赔率门槛，取折中）；三通道开盘窗口 2→3 次（maxAge 3→4）；
       盘中确认间隔 45→30 秒、确认窗口 1800→3600 秒。
+   ⑩ v14.6（工程加固，不改信号行为，策略维持 V7）：① 研究池指数标志位硬化（只认数字1/布尔true，
+      修历史版本字符串标志导致整池被误判为指数、研究池静默归零 0/0 的故障类）；② 研究池空池自愈
+      （过滤后为空→自动恢复默认池+显式日志/提示，杜绝静默 0/0）；③ 渲染层与台账层调用逐个容错；
+      ④ 加载中状态在覆盖指示器上显式显示。全部 DEFAULTS 与判定逻辑未动，参数指纹不变、
+      前向档案延续 V7 簇。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v14.5",
+  VERSION: "v14.6",
   STRATEGY_VERSION: "OPENING_DAILY_V7",
   INTRADAY_MODEL: "INTRADAY_V4",
   DEFAULTS: {

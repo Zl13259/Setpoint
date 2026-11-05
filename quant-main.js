@@ -1,4 +1,4 @@
-/* Quant v14.5 · quant-main.js
+/* Quant v14.6 · quant-main.js
    启动与事件层：共享状态、全局工具、模块加载校验、规则插件加载（RULE_MANIFEST）、事件绑定、boot。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → 本文件（最后）。 */
 "use strict";
@@ -150,7 +150,9 @@ function validList(a) {
 function loadLocal() {
     const saved = safeGet("quant_v10_watchlist");
     state.list = (validList(saved) && saved.length ? saved : DEFAULT_LIST).map(
-      (x) => [x[0], x[1], x[2] ? 1 : 0],
+      // v14.6：指数标志只认数字 1 / 布尔 true。旧版本若以字符串 "0"/"1" 持久化标志位，
+      // 旧写法的真值判断会把 "0" 当指数，导致整池被过滤、研究池静默归零（0/0 故障）。
+      (x) => [x[0], x[1], x[2] === 1 || x[2] === true ? 1 : 0],
     );
     const cfg = safeGet("quant_v10_settings");
     if (cfg) state.config = { ...state.config, ...cfg };
@@ -357,7 +359,17 @@ async function refreshSignals(force = true) {
       await loadBenchmarks(force);
       renderEnvironment();
       let done = 0;
-      const items = state.list.filter((x) => !x[2]);
+      let items = state.list.filter((x) => !x[2]);
+      if (!items.length) {
+        // v14.6 自愈：列表非空但全部被标为指数（或存储损坏）时，自动恢复默认研究池，
+        // 并以日志/提示显式告知——研究池 0/0 只能是配置层异常，不允许静默存在。
+        log("研究池无有效标的（" + state.list.length + " 项全部为指数参考或空），自动恢复默认研究池", "warning");
+        toast("研究池配置异常（全为指数），已自动恢复默认池");
+        state.list = DEFAULT_LIST.map((x) => x.slice());
+        saveList();
+        renderWatchList();
+        items = state.list.filter((x) => !x[2]);
+      }
       await pool(items, 3, async (item) => {
         const [code, name] = item,
           quote = state.quotes[code];
@@ -404,7 +416,8 @@ async function refreshSignals(force = true) {
         done++;
         setProgress(done, items.length, true);
         updateStatus(loadingText(`研究池加载 ${done}/${items.length}；失败显式保留，不用旧分数替代`, done, items.length));
-        renderSignals();
+        // v14.6：渲染层异常不得中断数据加载（数据行已先行落库，渲染失败只记日志）。
+        try { renderSignals(); } catch (e) { log("渲染层异常（不影响数据加载）：" + e.message, "error"); }
       });
       const valid = [...state.rows.values()].filter(
         (r) => r.status !== "DATA_ERROR",
@@ -414,10 +427,10 @@ async function refreshSignals(force = true) {
       );
       state.lastIntradayAt = Date.now();
       state.intradayMessage = "随全量信号刷新更新报价；日线与冻结几何已复核";
-      updateForwardJournal();
-      captureAllIntradaySamples();
-      updateIntradayJournal();
-      captureIntradayTriggers();
+      // v14.6：台账层调用逐个容错——单层故障不得抹掉已完成的信号加载成果。
+      try { updateForwardJournal(); } catch (e) { log("开盘台账更新异常：" + e.message, "error"); }
+      try { captureAllIntradaySamples(); updateIntradayJournal(); } catch (e) { log("盘中台账更新异常：" + e.message, "error"); }
+      try { captureIntradayTriggers(); } catch (e) { log("盘中触发捕获异常：" + e.message, "error"); }
       log(`研究池刷新完成，有效 ${valid}/${items.length}`);
     } catch (e) {
       updateStatus("刷新失败：" + e.message);

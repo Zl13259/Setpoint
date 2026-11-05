@@ -1,4 +1,4 @@
-/* Quant v14.5 · quant-ui.js
+/* Quant v14.6 · quant-ui.js
    渲染层：信号台、详情、回放汇总、诊断等全部 DOM 渲染。只读 state，不改判定逻辑。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -511,7 +511,9 @@ function renderSignals() {
     const all = [...state.rows.values()].filter((r) => !isIndex(r.code));
     for (const [id, status] of [["countPlan", "NEXT_SESSION_PLAN"], ["countWait", "WAIT_ENTRY"], ["countEntered", "MODEL_ENTERED"], ["countError", "DATA_ERROR"]])
       $(id).textContent = all.filter((r) => r.status === status).length;
-    $("coverageTop").textContent = all.filter((r) => r.status !== "DATA_ERROR").length + " / " + all.length;
+    $("coverageTop").textContent = (state.loading || state.scanning)
+      ? "加载中…"
+      : all.filter((r) => r.status !== "DATA_ERROR").length + " / " + all.length;
     const health = [state.marketHealth.A, state.marketHealth.US].filter(Boolean),
       healthErrors = health.filter((h) => h.error), healthWarnings = health.filter((h) => !h.error && h.warning);
     $("freshnessTop").textContent = healthErrors.length ? `${healthErrors.length} 个市场异常` : health.length ? health.map((h) => `${h.market} ${h.expectedDate ? h.expectedDate.slice(5) : "—"}`).join(" · ") : "待核验";

@@ -1,4 +1,4 @@
-/* Quant v14.5 objective signal and intraday execution core. No DOM, storage, network or account rules.
+/* Quant v14.6 objective signal and intraday execution core. No DOM, storage, network or account rules.
    纯内核：参数/通道/排除名单来自 globalThis.QRULES（quant-rules.js），插件规则来自 globalThis.QuantRules。 */
 const QuantCore = (() => {
   "use strict";
