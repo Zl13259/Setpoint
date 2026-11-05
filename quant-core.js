@@ -1,10 +1,11 @@
-/* Quant v14.1 objective signal and intraday execution core. No DOM, storage, network or account rules.
+/* Quant v14.3 objective signal and intraday execution core. No DOM, storage, network or account rules.
    纯内核：参数/通道/排除名单来自 globalThis.QRULES（quant-rules.js），插件规则来自 globalThis.QuantRules。 */
 const QuantCore = (() => {
   "use strict";
   const QRULES = globalThis.QRULES || {},
       VERSION = QRULES.VERSION || "v13.0",
-      STRATEGY_VERSION = QRULES.STRATEGY_VERSION || "OPENING_DAILY_V1";
+      STRATEGY_VERSION = QRULES.STRATEGY_VERSION || "OPENING_DAILY_V1",
+      INTRADAY_MODEL = QRULES.INTRADAY_MODEL || "INTRADAY_V2";
   const BUILTIN_DEFAULTS = Object.freeze({
     minBars: 80,
     minAmountA: 5e7,
@@ -1021,7 +1022,7 @@ const QuantCore = (() => {
     },
     out = (state, title, detail, tone = "neutral", extra = {}) => ({
       state, title, detail, tone, live: session.state === "REGULAR", actionable: false,
-      quoteDay, planKey, executionModel: "INTRADAY_V2", checks: baseChecks.slice(),
+      quoteDay, planKey, executionModel: INTRADAY_MODEL, checks: baseChecks.slice(),
       gateProgress: gateProgress(), ...extra,
     });
     const check = (key, label, pass, detail) => {
@@ -1054,7 +1055,7 @@ const QuantCore = (() => {
     const simulated = session.state !== "REGULAR";
     if (simulated && !validPositive(o.simPrice)) {
       const title = session.state === "PRE" ? "盘前仅预案｜不提前挂单" : session.state === "MIDDAY" ? "午间休市｜不生成实时指令" : "非盘中｜未触发预案当日作废";
-      return out("NON_SESSION", title, `冻结入场区 ${round(g.zoneLo, 4)}～${round(g.zoneHi, 4)}；无最近收盘模拟数据，五门不计算；连续竞价后重新通过五门确认。`, "neutral", { stop: g.stop, target: g.target });
+      return out("NON_SESSION", title, `冻结入场区 ${round(g.zoneLo, 4)}～${round(g.zoneHi, 4)}；无最近收盘模拟数据，七门不计算；连续竞价后重新通过七门确认。`, "neutral", { stop: g.stop, target: g.target });
     }
     if (simulated) {
       quote = {
@@ -1078,8 +1079,13 @@ const QuantCore = (() => {
         quoteDay < p.triggerDate
           ? `行情日 ${quoteDay || "—"} 早于触发日 ${p.triggerDate}，存在数据错位`
           : `行情日 ${quoteDay || "—"} 与本地交易日 ${z.day} 不一致`, "danger");
-    if (age > cfg.intradayQuoteMaxAgeSec * 1000)
-      return out("STALE", "不操作｜可执行报价已陈旧", `报价已 ${Math.floor(age / 60e3)} 分钟未更新；超过 ${cfg.intradayQuoteMaxAgeSec} 秒执行阈值，只保留观察`, "danger");
+    // v14.3：报价新鲜度按市场分设阈值——美股免费行情延迟普遍>180秒，
+    // 共用 A股阈值会使美股盘中七门恒为 STALE、盘中执行名存实亡。
+    const quoteMaxAgeSec = market === "US"
+      ? (cfg.intradayQuoteMaxAgeSecUS ?? cfg.intradayQuoteMaxAgeSec)
+      : cfg.intradayQuoteMaxAgeSec;
+    if (age > quoteMaxAgeSec * 1000)
+      return out("STALE", "不操作｜可执行报价已陈旧", `报价已 ${Math.floor(age / 60e3)} 分钟未更新；超过 ${quoteMaxAgeSec} 秒执行阈值（美股独立阈值），只保留观察`, "danger");
     if (o.status === "MODEL_ENTERED") {
       const sameDayA = market === "A" && p.entryDate === quoteDay ? "；A股入场当日不可卖，仅记录风险，不假定可成交" : "";
       if (price <= g.stop)
@@ -1090,7 +1096,7 @@ const QuantCore = (() => {
     }
     const maxAge = 2;
     if (!Number.isFinite(p.age) || p.age > maxAge)
-      return out("EXPIRED", "盘中窗口结束｜不沿用旧价位", `盘中五门只在信号年龄 ≤${maxAge} 个交易日内开放；当前信号年龄 ${p.age ?? "—"}`, "neutral");
+      return out("EXPIRED", "盘中窗口结束｜不沿用旧价位", `盘中七门只在信号年龄 ≤${maxAge} 个交易日内开放；当前信号年龄 ${p.age ?? "—"}`, "neutral");
     if (p.liquidity && p.liquidity.pass === false)
       return out("BLOCKED", "不操作｜日线流动性门槛未通过", p.liquidity.reason || "成交额不足，不能由盘中报价抵消", "warn");
 
@@ -1103,9 +1109,11 @@ const QuantCore = (() => {
       structurePass = price > g.stop && !(validPositive(quote.low) && +quote.low <= g.stop),
       rrPass = Number.isFinite(rr) && rr >= cfg.minRR,
       riskCheck = executionRiskCheck(g, price, cfg),
-      prevClose = validPositive(quote.prevClose) ? +quote.prevClose : g.triggerPrice || g.entryPrice,
+      // v14.3：严格使用行情源昨收；缺失时跳过涨停可成交检查，不回退冻结 triggerPrice——
+      // 冻结价可能陈旧数日，用它判断"接近涨停"会把正常价位误判为不可成交。
+      prevClose = validPositive(quote.prevClose) ? +quote.prevClose : null,
       limitPct = market === "A" ? priceLimit(o.code || "", o.name || "") : null,
-      nearLimitUp = market === "A" && limitPct && prevClose > 0 &&
+      nearLimitUp = market === "A" && limitPct && prevClose !== null &&
         price / prevClose - 1 >= (limitPct - 0.2) / 100 && validPositive(quote.high) && price >= +quote.high,
       tradablePass = !nearLimitUp && (quote.amount === null || quote.amount === undefined || (finite(quote.amount) && +quote.amount > 0)),
       quoteZ = quote.qtime ? tzInfo(new Date(quote.qtime), zone) : z,
@@ -1161,11 +1169,11 @@ const QuantCore = (() => {
     if (!confirmPass)
       return out("CONFIRMING", "确认中｜等待连续有效报价", confirmDetail + "；手动重复刷新且报价时间未推进不算新样本", "neutral", common);
     if (simulated)
-      return out("SIMULATED", "收盘模拟五门通过｜非盘中不下单", `按最近完成日K收盘 ${round(price, 4)} 模拟：净赔率 ${round(rr, 2)}∶1，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}。仅反映收盘时点的理论状态；实际执行须待连续竞价重新通过五门确认。`, "ok", { ...common, actionable: false });
-    return out("ACTIONABLE", "五门通过｜人工限价评估", `现价 ${round(price, 4)}；限价不高于 ${round(g.zoneHi, 4)}，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}，净赔率 ${round(rr, 2)}∶1。仅当日有效；仓位=风险预算÷止损幅度，环境／事件与账户红线另核`, "ok", { ...common, actionable: true });
+      return out("SIMULATED", "收盘模拟七门通过｜非盘中不下单", `按最近完成日K收盘 ${round(price, 4)} 模拟：净赔率 ${round(rr, 2)}∶1，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}。仅反映收盘时点的理论状态；实际执行须待连续竞价重新通过七门确认。`, "ok", { ...common, actionable: false });
+    return out("ACTIONABLE", "七门通过｜人工限价评估", `现价 ${round(price, 4)}；限价不高于 ${round(g.zoneHi, 4)}，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}，净赔率 ${round(rr, 2)}∶1。仅当日有效；仓位=风险预算÷止损幅度，环境／事件与账户红线另核`, "ok", { ...common, actionable: true });
   }
   /* v14.0 盘中触发型超跌反弹：把当前报价合成当日虚拟K线，对阶段①/②的超跌结构实时探测；
-     触发即冻结几何（当日有效），执行前仍走同一套五门；收盘后由 journal 层验票。 */
+     触发即冻结几何（当日有效），执行前仍走同一套七门；收盘后由 journal 层验票。 */
   function intradayOversoldPlan(bars, quote, cfg, market, now = new Date()) {
     const c = { ...DEFAULTS, ...(cfg || {}) };
     if (!Array.isArray(bars) || bars.length < c.minBars) return null;
@@ -1441,15 +1449,19 @@ const QuantCore = (() => {
       base.statusText = quality.errors[0];
       return base;
     }
-    const f = features(bars),
+    // v14.3：与回放层同口径——共享特征 + 增量 featureAt。此前每个通道×每个信号年龄
+    // 都全量重算 features()（最多 9 次 O(n)），全A深扫时这是主要耗时点。
+    const shared = featureShared(bars),
+      f = featureAt(bars, shared, bars.length - 1),
       liq = liquidity(f, market, cfg);
     for (const channel of Object.keys(CHANNELS)) {
       const maxAge = CHANNELS[channel].maxAge,
         evals = [];
       for (let age = maxAge - 1; age >= 0; age--) {
         const end = bars.length - age,
-          bb = benchmarkSlice(o.benchmarkBars, last(bars.slice(0, end)).date),
-          s = historicalSetup(channel, bars.slice(0, end), bb, cfg, market, o.code);
+          bb = benchmarkSlice(o.benchmarkBars, bars[end - 1].date),
+          fa = age === 0 ? f : featureAt(bars.slice(0, end), shared, end - 1),
+          s = finalizeHistorical(channel, fa, bb, cfg, market, o.code);
         if (s) evals.push({ age, s });
       }
       const triggered = evals.filter((x) => x.s.stage === 3);
@@ -2301,7 +2313,7 @@ const QuantCore = (() => {
       R = (exit - entry) / initialRisk, actualBars = holdingBars.slice(0, exitIndex + 1),
       closePath = actualBars.map((b, i) => ({ t: i + 1, date: b.date, close: b.close, netR: netR(b.close), netReturnPct: netReturnPct(b.close) }));
     return {
-      status: "CLOSED", settled, rightCensored: !settled, executionModel: "INTRADAY_V2",
+      status: "CLOSED", settled, rightCensored: !settled, executionModel: INTRADAY_MODEL,
       entryDate, exitDate, entry: entryPrice, entryCost: entry, initialRisk, exit, R, reason,
       exitIndex, holdingTradingDays: exitIndex + 1, firstTargetDay, firstStopDay,
       mfeR: max(actualBars.map((b) => netR(b.high))), maeR: min(actualBars.map((b) => netR(b.low))),
@@ -2320,8 +2332,11 @@ const QuantCore = (() => {
       const group = closed.filter((e) => e.channel === channel), gs = rStats(group.map((e) => e.result.R));
       by[channel] = { channel, ...gs, pending: rows.filter((e) => !e.done && e.channel === channel).length };
     }
+    // v14.3：执行模型标签按档案实际值汇总（缺省按 V2 旧档案），避免历史档案被新标签覆盖。
+    const models = new Set(rows.map((e) => e.executionModel || "INTRADAY_V2"));
     return {
-      executionModel: "INTRADAY_V2", total: rows.length, closed: closed.length, skipped: skipped.length,
+      executionModel: models.size === 1 ? [...models][0] : "MIXED",
+      total: rows.length, closed: closed.length, skipped: skipped.length,
       pending: rows.length - closed.length - skipped.length, ...stats,
       channels: Object.values(by), status: closed.length < 30 ? "样本不足·仅前向诊断" : "探索性样本≥30·仍非有效性证明",
     };
@@ -2596,22 +2611,28 @@ const QuantCore = (() => {
         next = new Date(Date.parse(last(b).date + "T00:00:00Z") + 864e5).toISOString().slice(0, 10),
         r = analyzeSymbol({ code: "sh600000", name: "测试", bars: b, benchmarkBars: b,
           quote: { price: s.geometry.zoneHi + 0.01, pct: 1 }, now: new Date(next + "T00:00:00Z") });
-      return r.status === "NEXT_SESSION_PLAN" && r.statusText === "今日开盘预案·余1次" &&
-        r.primary.usedAttempts === 0 && r.primary.remainingAttempts === 1 &&
+      return r.status === "NEXT_SESSION_PLAN" && r.statusText === "今日开盘预案·余2次" &&
+        r.primary.usedAttempts === 0 && r.primary.remainingAttempts === 2 &&
         r.primary.geometry.zoneHi === s.geometry.zoneHi;
     });
-    test("突破唯一开盘区外即失效且不以现价回区复活", () => {
+    test("突破连续两次开盘区外即窗口耗尽且不以现价回区复活", () => {
+      // v14.2 适配：突破通道自 v14.0 起有效期 3（2 次开盘窗口），窗口耗尽需连续两次区外开盘
       const b = makeBreakoutSynthetic();
       for (let i = 79; i < 85; i++) b[i].low -= 0.4;
       const s = historicalSetup("breakout", b, b, DEFAULTS),
         next = new Date(Date.parse(last(b).date + "T00:00:00Z") + 864e5).toISOString().slice(0, 10),
+        d2 = new Date(Date.parse(next + "T00:00:00Z") + 864e5).toISOString().slice(0, 10),
         open = s.geometry.zoneHi + 0.01,
-        now = new Date(next + "T02:00:00Z"),
-        r = analyzeSymbol({ code: "sh600000", name: "测试", bars: b, benchmarkBars: b,
+        bars2 = b.concat([
+          { date: next, open, high: open, low: open * 0.99, close: open * 0.995, volume: 1e7, amount: open * 1e7 },
+          { date: d2, open, high: open, low: open * 0.99, close: open * 0.995, volume: 1e7, amount: open * 1e7 },
+        ]),
+        now = new Date(d2 + "T12:00:00Z"),
+        r = analyzeSymbol({ code: "sh600000", name: "测试", bars: bars2, benchmarkBars: bars2,
           quote: { price: s.geometry.entryPrice, open, high: open, low: open, pct: 1, qtime: now.getTime() }, now }),
         trade = executeTrade(s, { date: next, open, high: open, low: open }, [], "A", DEFAULTS);
       return r.status === "EXPIRED" && r.statusText === "已失效·窗口耗尽" && !r.prefiltered &&
-        r.primary.usedAttempts === 1 && r.primary.remainingAttempts === 0 && trade.status === "SKIP";
+        r.primary.usedAttempts === 2 && r.primary.remainingAttempts === 0 && trade.status === "SKIP";
     });
     test("开盘条件满足转模型待结算而非盘中候选", () => {
       const b = makeBreakoutSynthetic(), s = historicalSetup("breakout", b, b, DEFAULTS),
@@ -2638,8 +2659,9 @@ const QuantCore = (() => {
         price = s.geometry.entryPrice,
         r = analyzeSymbol({ code: "sh600000", name: "测试", bars: b, benchmarkBars: b,
           quote: { price, pct: 1 }, now: new Date(next + "T00:00:00Z") });
-      return r.status === "NEXT_SESSION_PLAN" && r.statusText === "今日开盘预案·余1次" &&
-        r.primary.executionHorizon === "TODAY_OPEN" && r.primary.usedAttempts === 0;
+      return r.status === "NEXT_SESSION_PLAN" && r.statusText === "今日开盘预案·余2次" &&
+        r.primary.executionHorizon === "TODAY_OPEN" && r.primary.usedAttempts === 0 &&
+        r.primary.remainingAttempts === 2;
     });
     test("盘后按实际开盘结果区分已触发与窗口耗尽", () => {
       const b = makeBreakoutSynthetic(), s = historicalSetup("breakout", b, b, DEFAULTS),
@@ -2652,8 +2674,8 @@ const QuantCore = (() => {
         open = outsideSetup.geometry.zoneHi + 0.01,
         outside = analyzeSymbol({ code: "sh600000", name: "测试", bars: b, benchmarkBars: b,
           quote: { price: outsideSetup.geometry.entryPrice, open, high: open, low: open, pct: 1, qtime: now.getTime() }, now });
-      return inside.status === "MODEL_ENTERED" && outside.status === "EXPIRED" &&
-        outside.statusText === "已失效·窗口耗尽";
+      return inside.status === "MODEL_ENTERED" && outside.status === "WAIT_ENTRY" &&
+        outside.statusText === "等待下次开盘·余1次" && outside.primary.usedAttempts === 1;
     });
     test("回踩第二次开盘失败后窗口耗尽", () => {
       const now = new Date("2026-10-27T20:00:00Z"),
@@ -2839,7 +2861,7 @@ const QuantCore = (() => {
           signalClose: 10, limitPct: null, bars: [],
           quote: { price: 12, open: 12, high: 12, low: 12, qtime: now.getTime() },
           market: "US", now, config: DEFAULTS });
-      return r.status === "NEXT_SESSION_PLAN" && r.usedAttempts === 0 && r.remainingAttempts === 1;
+      return r.status === "NEXT_SESSION_PLAN" && r.usedAttempts === 0 && r.remainingAttempts === 2;
     });
     test("回放显式排除杠杆反向ETF", () => {
       const r = replaySymbol({ code: "usSOXS", name: "SOXS", bars: makeSynthetic(160), market: "US" });
@@ -2888,7 +2910,7 @@ const QuantCore = (() => {
       ],
       config: DEFAULTS,
     });
-    test("盘中五门通过才形成人工限价提示", () => {
+    test("盘中七门通过才形成人工限价提示", () => {
       const a = intradayAdvice(intraBase());
       return a.actionable && a.state === "ACTIONABLE" && a.checks.length === 7 && a.checks.every((x) => x.pass) && a.validOnlyToday;
     });
@@ -2957,7 +2979,7 @@ const QuantCore = (() => {
       const a = intradayAdvice(o);
       return !a.actionable && a.state === "NO_PLAN";
     });
-    test("信号当日盘后即开放五门试算，不再跨日排队", () => {
+    test("信号当日盘后即开放七门试算，不再跨日排队", () => {
       const base = intraBase(),
         postSame = {
           ...base,
@@ -3134,11 +3156,33 @@ const QuantCore = (() => {
       const a = intradayAdvice(o);
       return !a.actionable && a.state === "CONFIRMING" && a.confirmation.count < 2;
     });
+    // v14.3 回归：涨停可成交检查严格用行情源昨收；缺失时跳过，不用可能陈旧的冻结 triggerPrice 兜底。
+    test("涨停判定缺少昨收时跳过可成交检查（不用冻结价兜底）", () => {
+      const o = intraBase();
+      o.primary.triggerGeometry = { valid: true, zoneLo: 9, zoneHi: 11, stop: 8.4, target: 16, atrValue: 2, entryPrice: 10 };
+      o.quote = { price: 10.99, qtime: Date.parse("2026-10-27T02:00:00Z"), amount: 4e6, prevClose: null, high: 10.99, low: 10.99 };
+      const a = intradayAdvice(o);
+      return a.actionable && a.state === "ACTIONABLE";
+    });
+    // v14.3 回归：美股盘中报价年龄使用独立阈值 1200 秒（旧 180 秒会让免费延迟行情恒为 STALE）。
+    test("美股盘中报价年龄使用独立宽松阈值", () => {
+      const now = new Date("2026-10-27T14:00:00Z"),
+        o = intraBase();
+      o.market = "US"; o.code = "usTEST"; o.now = now;
+      o.quote = { price: 10.1, qtime: now.getTime() - 300e3, amount: 4e6, prevClose: 9.8, high: 10.2, low: 9.9 };
+      o.samples = [
+        { price: 10, low: 9.8, qtime: now.getTime() - 60e3 },
+        { price: 10.1, low: 9.9, qtime: now.getTime() },
+      ];
+      const a = intradayAdvice(o);
+      return a.actionable && a.state === "ACTIONABLE";
+    });
     return tests;
   }
   return {
     VERSION,
     STRATEGY_VERSION,
+    INTRADAY_MODEL,
     DEFAULTS,
     CHANNELS,
     clamp,

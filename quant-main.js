@@ -1,4 +1,4 @@
-/* Quant v14.0 · quant-main.js
+/* Quant v14.3 · quant-main.js
    启动与事件层：共享状态、全局工具、模块加载校验、规则插件加载（RULE_MANIFEST）、事件绑定、boot。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → 本文件（最后）。 */
 "use strict";
@@ -266,7 +266,7 @@ async function refreshIntradayQuotes(manual = true) {
       captureAllIntradaySamples();
       captureIntradayTriggers();
       renderSignals();
-      if (manual) toast("盘中报价已更新；五门状态与触发档案已复核");
+      if (manual) toast("盘中报价已更新；七门状态与触发档案已复核");
     } catch (e) {
       state.intradayMessage = "报价刷新失败：" + e.message + "；不沿用旧动作";
       log(state.intradayMessage, "error");
@@ -304,8 +304,10 @@ async function loadBenchmarks(force = true) {
       state.marketHealth[market] = health;
       try {
         const quote = (await loadQuotes([code]))[code],
-          chain = market === "US" ? [klineSina, klineTX, klineEM] : [klineTX, klineEM, klineSina],
-          names = market === "US" ? ["新浪", "腾讯", "东财"] : ["腾讯", "东财", "新浪"],
+          // v14.3：A股基准与个股 K 线源统一为 东财→腾讯→新浪（此前基准仍为 腾讯→东财→新浪，
+          // 基准/个股复权口径不一致会系统性污染 RS、偏离度与20日高低点）；美股保持 新浪→腾讯→东财。
+          chain = market === "US" ? [klineSina, klineTX, klineEM] : [klineEM, klineTX, klineSina],
+          names = market === "US" ? ["新浪", "腾讯", "东财"] : ["东财", "腾讯", "新浪"],
           settled = await Promise.all(chain.map(async (fn, i) => {
             try {
               const bars = acceptKline(await fn(code));
