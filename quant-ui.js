@@ -1,4 +1,4 @@
-/* Quant v14.3 · quant-ui.js
+/* Quant v14.5 · quant-ui.js
    渲染层：信号台、详情、回放汇总、诊断等全部 DOM 渲染。只读 state，不改判定逻辑。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -128,7 +128,7 @@ function statusReason(r) {
     const p = r.primary;
     if (!p || p.stage !== 3 || !["REJECTED", "RESEARCH_ONLY"].includes(r.status)) return "";
     const g = p.geometry;
-    if (r.status === "RESEARCH_ONLY" && g && g.netRR >= 1 && g.netRR < state.config.minRR)
+    if (r.status === "RESEARCH_ONLY" && g && g.netRR >= 1 && g.netRR < C.channelMinRR(p.channel, state.config))
       return `净赔率 ${fmt(g.netRR, 2)}∶1＜${fmt(state.config.minRR, 1)}∶1`;
     return (p.reasons || [])[0] || "未通过执行门槛";
   }
@@ -179,10 +179,10 @@ function signedPct(v, d = 1) {
   }
 
 /* v13.5：净赔率显示口径默认整区最优，现价口径降为副行，避免"现价 10.82∶1／整区 3.77∶1"式误导。 */
-function rrLineText(g, zoneBestRR = null) {
+function rrLineText(g, zoneBestRR = null, channel = "breakout") {
     if (!g || !g.valid || !Number.isFinite(g.netRR) || g.netRR <= 0)
       return "净赔率 —";
-    const minRR = state.config.minRR || C.DEFAULTS.minRR,
+    const minRR = C.channelMinRR(channel, state.config),
       gateGap = (g.netRR / minRR - 1) * 100,
       excellentGap = (g.netRR / 2 - 1) * 100;
     const gate = `${g.netRR >= minRR ? "高于" : "低于"}门槛${fmt(minRR, 1)}：${signedPct(gateGap)}`,
@@ -253,7 +253,7 @@ function conclusionHTML(r) {
       a = actionGuidance(r);
     if (!p && r.primary && r.primary.previewGeometry && Number.isFinite(r.price) && !["DATA_ERROR", "UNSUPPORTED", "UNTRADABLE"].includes(r.status)) {
       const pg = C.repriceGeometry(r.primary.previewGeometry, r.price, state.config),
-        rr = rrLineText(pg, r.primary.previewZoneBestRR),
+        rr = rrLineText(pg, r.primary.previewZoneBestRR, r.primary.channel),
         entry = entryLineText(pg, r.price),
         risk = `止损 ${fmt(pg.stop)}（${stopDistanceText(pg, r.price)}），目标 ${fmt(pg.target)}（${targetDistanceText(pg, r.price)}）`,
         zoneRR = Number.isFinite(r.primary.previewZoneBestRR) ? `整区最优预估 ${fmt(r.primary.previewZoneBestRR, 2)}∶1 / 门槛 ${fmt(state.config.minRR, 1)}∶1` : "整区最优预估 —";
@@ -263,7 +263,7 @@ function conclusionHTML(r) {
     if (!p && !["DATA_ERROR", "UNSUPPORTED", "UNTRADABLE"].includes(r.status))
       detail = "数据已加载；未形成正式信号，不生成评分、净赔率与冻结交易几何。";
     if (p && g) {
-      const rr = rrLineText(g, p.zoneBestRR),
+      const rr = rrLineText(g, p.zoneBestRR, p.channel),
         entry = entryLineText(g, r.price),
         risk = `止损 ${fmt(g.stop)}（${stopDistanceText(g, r.price)}），目标 ${fmt(g.target)}（${targetDistanceText(g, r.price)}）`,
         fresh = freshLineText(p);
@@ -283,10 +283,6 @@ function conclusionHTML(r) {
       }
     }
     return `<div class="verdict"><div class="verdict-title">${esc(title)}</div><div class="verdict-detail">${esc(detail)}</div></div>`;
-  }
-
-function actionHTML(r, detail = false) {
-    return conclusionHTML(r);
   }
 
 function currentQuote(r) {
@@ -395,7 +391,7 @@ function currentIntraday(r) {
     return a;
   }
 
-function intradayHTML(r, detail = false) {
+function intradayHTML(r) {
     if (isIndex(r.code)) return "";
     const a = currentIntraday(r),
       gp = a.gateProgress,
@@ -544,7 +540,7 @@ function detailHTML(r) {
           zoneRR = Number.isFinite(obs.previewZoneBestRR) ? `整区最优预估净赔率 ${fmt(obs.previewZoneBestRR, 2)}∶1（门槛 ${fmt(state.config.minRR, 1)}∶1）` : "整区最优预估净赔率 —";
         previewBlock = `<div><h3>交易空间与价位（预估）</h3><div class="geometry-grid"><div><span>预估入场区</span><b class="num">${fmt(pg.zoneLo)}～${fmt(pg.zoneHi)}</b></div><div><span>现价净赔率（预估）</span><b class="num rr-now">${rrText(pg)}</b></div><div><span>预估止损</span><b class="num">${fmt(pg.stop)}（${stopDistanceText(pg, r.price)}）</b><small>现价 ${fmt(pg.stopAtr, 2)} ATR｜区下沿 ${fmt(atrAt(pg, pg.zoneLo), 2)} ATR</small></div><div><span>预估第一目标</span><b class="num">${fmt(pg.target)}（${targetDistanceText(pg, r.price)}）</b><small>现价 ${fmt(pg.targetAtr, 2)} ATR</small></div>${pg.higherPressure ? `<div><span>最近高周期压力</span><b class="warn num">${esc(pg.higherPressure.period)} ${fmt(pg.higherPressure.price)}（${signedPct(pressurePct)}）</b><small>原目标 ${fmt(pg.rawTarget)}（${signedPct(rawTargetPct)}），已收缩</small></div>` : `<div><span>高周期压力</span><b>未提前收缩目标</b></div>`}<div><span>结构锚点</span><b>${esc(pg.anchorLabel)}</b></div></div>${narrow ? `<p class="small warn space-warning">空间偏窄：预估目标距现价不足 1 倍 ATR，可能处于日常波动范围内。</p>` : ""}${stopAtrWarning(pg)}<p class="small muted" style="margin-top:8px">${esc(zoneRR)}。以上为对未触发结构按现价的预估：不构成买点、不冻结几何、不进前向样本。费用 ${state.config.feeBps} bps（往返）＋滑点 ${state.config.slippageBps} bps（单边）。止损不保证成交。</p>${obs.previewQ ? dimHTML("预估 Q 子项（未触发）", obs.previewQ.dims) : ""}</div>`;
       }
-      return `<div class="detail"><div class="detail-checks"><h3>盘中七门核验</h3>${intradayChecksHTML(r)}</div>${previewBlock}<div><h3>观察原因</h3><p>${esc(r.statusText)}</p><p class="small muted">${esc(freshLineText(null))}；排序分 ${obs && obs.previewQ ? scoreBadgeHTML({ Q: obs.previewQ, E: obs.previewE, S: obs.previewS }, true) : scoreBadgeHTML(null)}</p></div><div><h3>数据时点</h3><p>${dataLine}</p></div><div><h3>质量诊断</h3><p>${esc([...((r.quality && r.quality.errors) || []), ...warnings].join("；") || "未形成三通道候选")}</p></div></div>`;
+      return `<div class="detail"><div class="detail-checks"><h3>盘中七门核验</h3>${intradayChecksHTML(r)}</div>${previewBlock}<div><h3>观察原因</h3><p>${esc(r.statusText)}</p><p class="small muted">排序分 ${obs && obs.previewQ ? scoreBadgeHTML({ Q: obs.previewQ, E: obs.previewE, S: obs.previewS }, true) : scoreBadgeHTML(null)}</p></div><div><h3>数据时点</h3><p>${dataLine}</p></div><div><h3>质量诊断</h3><p>${esc([...((r.quality && r.quality.errors) || []), ...warnings].join("；") || "未形成三通道候选")}</p></div></div>`;
     }
     const g = p.geometry, alt = r.alternates || [], a = actionGuidance(r),
       pressurePct = g.higherPressure && r.price > 0 ? (g.higherPressure.price / r.price - 1) * 100 : null,
@@ -556,7 +552,7 @@ function detailHTML(r) {
       attemptLine = (p.attempts || []).map((x) => `${x.date} ${x.status === "ENTER" ? "条件满足" : "未入场"}：${x.reason}`).join("；") || "尚未进行开盘检查",
       windowLine = `开盘窗口：已检查 ${p.usedAttempts ?? 0} / ${p.maxAttempts ?? "—"} 次；剩余 ${p.remainingAttempts ?? "—"} 次；${attemptLine}`,
       narrow = Number.isFinite(g.targetAtr) && g.targetAtr < 1;
-    return `<div class="detail"><div class="detail-checks"><h3>盘中七门核验</h3>${intradayChecksHTML(r)}</div><div><h3>交易翻译</h3><p><b>${esc(a.title)}</b> ${esc(a.detail)}</p><div class="exec-lines"><span class="exec-line">${esc(rrLineText(g, p.zoneBestRR))}</span><span class="exec-line">${esc(entryLineText(g, r.price))}</span><span class="exec-line">${esc(`止损 ${fmt(g.stop)}（${stopDistanceText(g, r.price)}）；目标 ${fmt(g.target)}（${targetDistanceText(g, r.price)}）；结构锚点 ${g.anchorLabel}`)}</span><span class="exec-line">${esc(freshLineText(p))}｜${esc(p.name)}｜排序分 ${esc(`Q ${fmt(p.Q.value, 1)} · E ${fmt(p.E.value, 1)} · S ${fmt(p.S, 1)}`)}</span></div><h4>信号依据</h4><ul class="reason-list">${(p.evidence || []).map((x) => `<li>${esc(x)}</li>`).join("")}<li>首次有效触发：${esc(p.triggerDate)}；信号年龄 ${p.age} 个完成交易日</li><li>${esc(windowLine)}</li>${(p.reasons || []).map((x) => `<li class="warn">${esc(x)}</li>`).join("")}</ul><h4>其他合格通道</h4><p>${alt.length ? alt.map((x) => esc(x.name) + " / " + esc(x.statusText)).join("；") : "无"}</p></div><div><h3>交易空间与价位</h3><div class="geometry-grid"><div><span>入场区</span><b class="num">${fmt(g.zoneLo)}～${fmt(g.zoneHi)}</b></div><div><span>现价净赔率</span><b class="num rr-now">${rrText(g)}</b><small>整区最优 ${Number.isFinite(p.zoneBestRR) ? fmt(p.zoneBestRR, 2) + "∶1" : "—"}</small></div><div><span>止损</span><b class="num">${fmt(g.stop)}（${stopDistanceText(g, r.price)}）</b><small>现价 ${fmt(g.stopAtr, 2)} ATR｜区下沿 ${fmt(atrAt(g, g.zoneLo), 2)} ATR</small></div><div><span>第一目标</span><b class="num">${fmt(g.target)}（${targetDistanceText(g, r.price)}）</b><small>现价 ${fmt(g.targetAtr, 2)} ATR</small></div>${pressure}<div><span>结构锚点</span><b>${esc(g.anchorLabel)}</b></div></div>${narrow ? `<p class="small warn space-warning">空间偏窄：第一目标距现价不足 1 倍 ATR，可能处于日常波动范围内；这只是提示，不自动改写候选或拉远目标。</p>` : ""}${stopAtrWarning(g)}<p class="small muted" style="margin-top:8px">百分比按现价计算；ATR 距离用于判断空间是否被日常波动主导，不是新硬门槛。上方压力：${pressureList}。费用 ${state.config.feeBps} bps（往返）＋滑点 ${state.config.slippageBps} bps（单边）。止损不保证成交。</p></div><div><h3>数据时点</h3><p>${dataLine}；${r.session.state === "REGULAR" ? "常规交易时段" : "非盘中，盘中未完成K线未计入Q"}</p>${warnings.length ? `<p class="small warn">${esc(warnings.join("；"))}</p>` : ""}<h4>质量诊断</h4><p>${esc([...((r.quality && r.quality.errors) || []), ...warnings].join("；") || "通过")}</p></div></div>`;
+    return `<div class="detail"><div class="detail-checks"><h3>盘中七门核验</h3>${intradayChecksHTML(r)}</div><div><h3>交易翻译</h3><p><b>${esc(a.title)}</b> ${esc(a.detail)}</p><div class="exec-lines"><span class="exec-line">${esc(rrLineText(g, p.zoneBestRR, p.channel))}</span><span class="exec-line">${esc(entryLineText(g, r.price))}</span><span class="exec-line">${esc(`止损 ${fmt(g.stop)}（${stopDistanceText(g, r.price)}）；目标 ${fmt(g.target)}（${targetDistanceText(g, r.price)}）；结构锚点 ${g.anchorLabel}`)}</span><span class="exec-line">${esc(freshLineText(p))}｜${esc(p.name)}｜排序分 ${esc(`Q ${fmt(p.Q.value, 1)} · E ${fmt(p.E.value, 1)} · S ${fmt(p.S, 1)}`)}</span></div><h4>信号依据</h4><ul class="reason-list">${(p.evidence || []).map((x) => `<li>${esc(x)}</li>`).join("")}<li>首次有效触发：${esc(p.triggerDate)}；信号年龄 ${p.age} 个完成交易日</li><li>${esc(windowLine)}</li>${(p.reasons || []).map((x) => `<li class="warn">${esc(x)}</li>`).join("")}</ul><h4>其他合格通道</h4><p>${alt.length ? alt.map((x) => esc(x.name) + " / " + esc(x.statusText)).join("；") : "无"}</p></div><div><h3>交易空间与价位</h3><div class="geometry-grid"><div><span>入场区</span><b class="num">${fmt(g.zoneLo)}～${fmt(g.zoneHi)}</b></div><div><span>现价净赔率</span><b class="num rr-now">${rrText(g)}</b><small>整区最优 ${Number.isFinite(p.zoneBestRR) ? fmt(p.zoneBestRR, 2) + "∶1" : "—"}</small></div><div><span>止损</span><b class="num">${fmt(g.stop)}（${stopDistanceText(g, r.price)}）</b><small>现价 ${fmt(g.stopAtr, 2)} ATR｜区下沿 ${fmt(atrAt(g, g.zoneLo), 2)} ATR</small></div><div><span>第一目标</span><b class="num">${fmt(g.target)}（${targetDistanceText(g, r.price)}）</b><small>现价 ${fmt(g.targetAtr, 2)} ATR</small></div>${pressure}<div><span>结构锚点</span><b>${esc(g.anchorLabel)}</b></div></div>${narrow ? `<p class="small warn space-warning">空间偏窄：第一目标距现价不足 1 倍 ATR，可能处于日常波动范围内；这只是提示，不自动改写候选或拉远目标。</p>` : ""}${stopAtrWarning(g)}<p class="small muted" style="margin-top:8px">百分比按现价计算；ATR 距离用于判断空间是否被日常波动主导，不是新硬门槛。上方压力：${pressureList}。费用 ${state.config.feeBps} bps（往返）＋滑点 ${state.config.slippageBps} bps（单边）。止损不保证成交。</p></div><div><h3>数据时点</h3><p>${dataLine}；${r.session.state === "REGULAR" ? "常规交易时段" : "非盘中，盘中未完成K线未计入Q"}</p>${warnings.length ? `<p class="small warn">${esc(warnings.join("；"))}</p>` : ""}<h4>质量诊断</h4><p>${esc([...((r.quality && r.quality.errors) || []), ...warnings].join("；") || "通过")}</p></div></div>`;
   }
 
 function previewVolume(v, market) {

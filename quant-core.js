@@ -1,4 +1,4 @@
-/* Quant v14.3 objective signal and intraday execution core. No DOM, storage, network or account rules.
+/* Quant v14.5 objective signal and intraday execution core. No DOM, storage, network or account rules.
    纯内核：参数/通道/排除名单来自 globalThis.QRULES（quant-rules.js），插件规则来自 globalThis.QuantRules。 */
 const QuantCore = (() => {
   "use strict";
@@ -16,12 +16,20 @@ const QuantCore = (() => {
     holdingDays: 10,
     intradayQuoteMaxAgeSec: 180,
     intradayConfirmSamples: 2,
-    intradayMinSampleGapSec: 45,
-    intradayConfirmWindowSec: 1800,
+    intradayMinSampleGapSec: 30,
+    intradayConfirmWindowSec: 3600,
     intradaySampleMaxAgeSec: 3600,
     intradayMinVolumePace: 0.8,
     minStopAtr: 0.5,
     maxStopAtr: 2.5,
+    oversoldLowBufferAtr: 0.3,
+    oversoldStableVolMult: 1.25,
+    oversoldStableShadowMult: 1.2,
+    oversoldStableBarsAtrPct: [4.0, 2.0],
+    oversoldRecoverRsi: 40,
+    channelMinRR: { oversold: 1.2, pullback: 1.5, breakout: 1.5 },
+    breakoutMinVolRatio: 1.1,
+    breakoutZoneHiAtr: 0.5,
   });
   const DEFAULTS = Object.freeze({ ...BUILTIN_DEFAULTS, ...(QRULES.DEFAULTS || {}) });
   const CHANNELS = QRULES.CHANNELS || {
@@ -399,8 +407,9 @@ const QuantCore = (() => {
       },
     };
   }
-  function detectImpl(channel, f, benchmark) {
-    const b = f.bars,
+  function detectImpl(channel, f, benchmark, conf) {
+    const c = { ...DEFAULTS, ...(conf || {}) },
+      b = f.bars,
       n = f.n,
       i = n - 1,
       x = b[i],
@@ -416,7 +425,8 @@ const QuantCore = (() => {
     if (channel === "oversold") {
       let event = -1,
         eventZ = null;
-      for (let j = Math.max(20, n - 11); j < n; j++) {
+      // v14.5：事件窗口 10→15 个完成日——崩盘后筑底常需一周以上，旧窗口在反弹触发前事件就过期。
+      for (let j = Math.max(20, n - 16); j < n; j++) {
         const z = f.rsi[j],
           slice = b.slice(j - 19, j + 1),
           mu = mean(slice.map((y) => y.close)),
@@ -429,34 +439,42 @@ const QuantCore = (() => {
         }
       }
       if (event < 0) {
-        base.missing = ["近10日无明确超跌事件"];
+        base.missing = ["近15日无明确超跌事件"];
         return base;
       }
       const eb = b[event],
         after = b.slice(event + 1);
       const atrEvt = max(f.atrArr.slice(event, Math.min(n, event + 4)).filter(Number.isFinite)) || f.atr,
         atrPctEvt = eb.close > 0 ? (atrEvt / eb.close) * 100 : null,
-        requiredStable = atrPctEvt === null ? 1 : atrPctEvt >= 2.0 ? 3 : atrPctEvt >= 1.0 ? 2 : 1;
+        requiredStable = atrPctEvt === null ? 1 : atrPctEvt >= c.oversoldStableBarsAtrPct[0] ? 3 : atrPctEvt >= c.oversoldStableBarsAtrPct[1] ? 2 : 1;
       const stableBars = b.slice(event + 1, -1);
       let stableBeforeTrigger = 0;
       for (const y of stableBars) {
         const body = Math.abs(y.close - y.open),
           shadow = Math.min(y.open, y.close) - y.low,
-          volOk = y.volume <= f.volAvg20 * 1.1;
-        if (y.close >= y.open || shadow > body * 1.5 || volOk)
+          volOk = y.volume <= f.volAvg20 * c.oversoldStableVolMult;
+        if (y.close >= y.open || shadow > body * c.oversoldStableShadowMult || volOk)
           stableBeforeTrigger++;
       }
       const eventLow = eb.low,
+        lowBuffer = f.atr * c.oversoldLowBufferAtr,
         noNewLow = after.length
-          ? min(after.map((y) => y.low)) >= eventLow - f.atr * 0.2
+          ? min(after.map((y) => y.low)) >= eventLow - lowBuffer
           : true,
         breakPrevHigh = x.close > p.high && x.close > x.open,
         cross5 = x.close > f.ma5[i] && p.close <= f.ma5[i - 1],
+        // v14.5 RSI 恢复触发器：事件日 RSI≤30 后回升至 ≥oversoldRecoverRsi 且收复事件日收盘。
+        // Monte Carlo（40万评估点）显示 62% 的②阶段候选死于"未收复 MA5"、38% 死于"K线强度不足"——
+        // 深 V 结构里 MA5 收复滞后于动能修复，原触发器覆盖不到这种形态。
+        rsiRecover =
+          f.rsi[event] !== null && f.rsi[event] !== undefined &&
+          f.rsi[event] <= 30 && f.rsi[i] >= c.oversoldRecoverRsi &&
+          x.close > eb.close,
         trigger =
           noNewLow &&
           stableBeforeTrigger >= requiredStable &&
-          (breakPrevHigh || cross5) &&
-          x.close > f.ma5[i];
+          (breakPrevHigh || cross5 || rsiRecover) &&
+          (x.close > f.ma5[i] || rsiRecover);
       Object.assign(base.metrics, {
         eventIndex: event,
         eventLow,
@@ -471,11 +489,12 @@ const QuantCore = (() => {
         stableCount: stableBeforeTrigger,
         requiredStable,
         noNewLow,
+        rsiRecover,
         volContraction: f.volume < f.volAvg20,
         breakPrevHigh,
         closePos: f.closePos,
         volRatio: f.volRatio || 1,
-        aboveEventLow: x.low >= eventLow - f.atr * 0.2,
+        aboveEventLow: x.low >= eventLow - lowBuffer,
         close: f.close,
         ma5: f.ma5[i],
         ma20: f.ma20[i],
@@ -604,7 +623,7 @@ const QuantCore = (() => {
         f.close >= f.baseHigh - f.atr * 0.6 &&
         f.close <= f.baseHigh + f.atr * 1.5,
       above = f.close > f.baseHigh + f.atr * 0.05,
-      volOk = f.volRatio !== null && f.volRatio >= 1.2,
+      volOk = f.volRatio !== null && f.volRatio >= c.breakoutMinVolRatio,
       priceOk = f.closePos >= 0.55,
       trigger = above && volOk && priceOk,
       pressureTouches = f.bars
@@ -649,8 +668,8 @@ const QuantCore = (() => {
     return base;
   }
   function detect(channel, f, benchmark, cfg, market = "A") {
-    const base = detectImpl(channel, f, benchmark),
-      conf = { ...DEFAULTS, ...(cfg || {}) };
+    const conf = { ...DEFAULTS, ...(cfg || {}) },
+      base = detectImpl(channel, f, benchmark, conf);
     if (!base || base.stage === 3 || !f) return base;
     try {
       const m = base.metrics || {},
@@ -789,7 +808,7 @@ const QuantCore = (() => {
     } else {
       stop = a.pressure - atr * 0.75;
       zoneLo = a.pressure;
-      zoneHi = a.pressure + atr * 0.35;
+      zoneHi = a.pressure + atr * cfg.breakoutZoneHiAtr;
       target = a.pressure + Math.max(a.baseRange, 2 * atr);
       anchorLabel = "突破压力";
     }
@@ -860,13 +879,20 @@ const QuantCore = (() => {
       geometry = netGeometry("breakout", f, { anchors }, requiredClose, c, requiredClose),
       bestRR = zoneBestRR(geometry, c),
       above = f.close > requiredClose,
-      requiredVolume = f.volAvg20 * 1.2,
+      requiredVolume = f.volAvg20 * c.breakoutMinVolRatio,
       volumeOk = Number.isFinite(requiredVolume) && f.volume >= requiredVolume,
       priceOk = f.closePos >= 0.55,
       near = f.close >= f.baseHigh - f.atr * 0.6 && f.close <= f.baseHigh + f.atr * 1.5;
     return { pressure: f.baseHigh, atr: f.atr, requiredClose, requiredVolume,
       currentVolume: f.volume, closePos: f.closePos, above, volumeOk, priceOk, near,
-      geometry, zoneBestRR: bestRR, prefiltered: !(Number.isFinite(bestRR) && bestRR >= c.minRR) || !executionRiskCheck(geometry, geometry.zoneLo, c).pass };
+      geometry, zoneBestRR: bestRR, prefiltered: !(Number.isFinite(bestRR) && bestRR >= channelMinRR("breakout", c)) || !executionRiskCheck(geometry, geometry.zoneLo, c).pass };
+  }
+  // v14.5：通道级净赔率门槛——优先级 channelMinRR[channel] > minRR。
+  function channelMinRR(channel, cfg) {
+    const override = (cfg.channelMinRR || {})[channel];
+    if (!(Number.isFinite(override) && override > 0)) return cfg.minRR;
+    // 语义：通道级下限是科学默认值；用户显式把全局 minRR 调得比出厂默认更高时，全局优先。
+    return cfg.minRR > BUILTIN_DEFAULTS.minRR ? cfg.minRR : override;
   }
   function liquidity(f, market, cfg) {
     const threshold = market === "A" ? cfg.minAmountA : cfg.minAmountUS;
@@ -1101,13 +1127,14 @@ const QuantCore = (() => {
       return out("BLOCKED", "不操作｜日线流动性门槛未通过", p.liquidity.reason || "成交额不足，不能由盘中报价抵消", "warn");
 
     const current = repriceGeometry(g, price, cfg), rr = current.netRR,
+      rrFloor = channelMinRR(p.channel, cfg),
       zoneDrift = Number.isFinite(p.age) && p.age >= 1 ? 0.01 : 0,
       zoneLoEff = g.zoneLo * (1 - zoneDrift),
       zoneHiEff = g.zoneHi * (1 + zoneDrift),
       driftNote = zoneDrift ? `（信号${p.age}日，放宽至冻结区±1%：${round(zoneLoEff, 4)}～${round(zoneHiEff, 4)}）` : "",
       inZone = price >= zoneLoEff && price <= zoneHiEff,
       structurePass = price > g.stop && !(validPositive(quote.low) && +quote.low <= g.stop),
-      rrPass = Number.isFinite(rr) && rr >= cfg.minRR,
+      rrPass = Number.isFinite(rr) && rr >= rrFloor,
       riskCheck = executionRiskCheck(g, price, cfg),
       // v14.3：严格使用行情源昨收；缺失时跳过涨停可成交检查，不回退冻结 triggerPrice——
       // 冻结价可能陈旧数日，用它判断"接近涨停"会把正常价位误判为不可成交。
@@ -1126,7 +1153,7 @@ const QuantCore = (() => {
       volumePass = Number.isFinite(volumePace) && volumePace >= cfg.intradayMinVolumePace;
     check("structure", "结构有效", structurePass, structurePass ? "现价与日内低点未触及冻结止损" : "日内已触及冻结失效锚点");
     check("zone", "价格在冻结入场区", inZone, `${round(price, 4)} / ${round(zoneLoEff, 4)}～${round(zoneHiEff, 4)}${driftNote}`);
-    check("rr", "成本后净赔率", rrPass, `${Number.isFinite(rr) ? round(rr, 2) : "—"}∶1 / 门槛 ${round(cfg.minRR, 1)}∶1`);
+    check("rr", "成本后净赔率", rrPass, `${Number.isFinite(rr) ? round(rr, 2) : "—"}∶1 / 门槛 ${round(rrFloor, 1)}∶1`);
     check("riskDistance", "止损距离", riskCheck.pass, riskCheck.reason || (riskCheck.unavailable ? "旧档案缺少ATR，沿用原几何" : `${round(riskCheck.stopAtr, 2)} ATR / 允许 ${round(cfg.minStopAtr, 1)}～${round(cfg.maxStopAtr, 1)} ATR`));
     check("tradable", "可成交性", tradablePass, nearLimitUp ? "接近涨停且位于日内高价，无法确认可成交" : "未发现当前报价级成交拦截");
     check("volume", "当日量能节奏", volumePass, Number.isFinite(volumePace) ? `${round(volumePace, 2)}× / 初始门槛 ${round(cfg.intradayMinVolumePace, 2)}×` : "缺少成交额、20日基准或有效交易时长");
@@ -1161,7 +1188,7 @@ const QuantCore = (() => {
     if (!riskCheck.pass)
       return out("RISK_DISTANCE", "止损距离不合格｜不开仓", riskCheck.reason, "warn", common);
     if (!rrPass)
-      return out("WAIT_RR", "净赔率不足｜不开仓", `按现价与冻结止损、目标重算为 ${Number.isFinite(rr) ? round(rr, 2) : "—"}∶1，低于 ${round(cfg.minRR, 1)}∶1`, "warn", common);
+      return out("WAIT_RR", "净赔率不足｜不开仓", `按现价与冻结止损、目标重算为 ${Number.isFinite(rr) ? round(rr, 2) : "—"}∶1，低于 ${round(rrFloor, 1)}∶1`, "warn", common);
     if (!tradablePass)
       return out("UNTRADABLE", "可成交性不足｜不下单", nearLimitUp ? "现价接近涨停且处于日内高位，不能把可看见价格当作可成交价格" : "当日成交额无效，无法确认成交状态", "warn", common);
     if (!volumePass)
@@ -1184,7 +1211,7 @@ const QuantCore = (() => {
     if (quoteDay !== tzInfo(now, zone).day) return null;
     const completed = completedBars(bars, market, now);
     if (!completed.length || last(completed).date >= quoteDay) return null;
-    const probe = detectImpl("oversold", features(completed), null);
+    const probe = detectImpl("oversold", features(completed), null, c);
     if (!probe || probe.stage < 1 || probe.stage === 3) return null;
     const price = +quote.price,
       vb = {
@@ -1199,7 +1226,7 @@ const QuantCore = (() => {
         amount: finite(quote.amount) ? +quote.amount : null,
       },
       f = features(completed.concat([vb])),
-      s = detectImpl("oversold", f, null);
+      s = detectImpl("oversold", f, null, c);
     if (!s || s.stage !== 3 || !s.Q) return null;
     const geometry = netGeometry("oversold", f, s, price, c, price);
     geometry.entryPrice = price;
@@ -1251,7 +1278,7 @@ const QuantCore = (() => {
       });
     }
     const attempts = [],
-      signal = { geometry: o.geometry, signalClose: o.signalClose, limitPct: o.limitPct };
+      signal = { geometry: o.geometry, signalClose: o.signalClose, limitPct: o.limitPct, channel: o.channel };
     for (let i = 0; i < Math.min(maxAttempts, entryBars.length); i++) {
       const bar = entryBars[i],
         barBroken = bar.completed
@@ -1485,7 +1512,7 @@ const QuantCore = (() => {
         g = repriceGeometry(triggerGeometry, base.price, cfg),
         bestZoneRR = zoneBestRR(triggerGeometry, cfg),
         zoneRiskCheck = channel === "pullback" ? { pass: true } : executionRiskCheck(triggerGeometry, triggerGeometry.zoneLo, cfg),
-        rrPrefail = !(Number.isFinite(bestZoneRR) && bestZoneRR >= cfg.minRR),
+        rrPrefail = !(Number.isFinite(bestZoneRR) && bestZoneRR >= channelMinRR(channel, cfg)),
         prefiltered = channel !== "pullback" && (rrPrefail || !zoneRiskCheck.pass),
         limitPct = market === "A" ? priceLimit(o.code, o.name) : null,
         reasons = [];
@@ -1529,7 +1556,7 @@ const QuantCore = (() => {
           status = "RESEARCH_ONLY";
           if (rrPrefail) {
             statusText = "预筛剔除·整区赔率不足";
-            reasons.push(`冻结入场区最优净赔率 ${round(bestZoneRR, 2) ?? "—"}∶1＜${round(cfg.minRR, 1)}∶1`);
+            reasons.push(`冻结入场区最优净赔率 ${round(bestZoneRR, 2) ?? "—"}∶1＜${round(channelMinRR(channel, cfg), 1)}∶1`);
             executionNote = "整个冻结入场区均无法达到赔率门，默认退出信号台；研究与回放保留。";
           } else {
             statusText = "预筛剔除·止损距离不合格";
@@ -1537,10 +1564,10 @@ const QuantCore = (() => {
             executionNote = "止损过近易被日常波动扫损或过宽风险失控，整个入场区均无法通过执行门槛，默认退出信号台；研究与回放保留。";
           }
         } else if (reasons.length) {
-          status = g.netRR >= 1 && g.netRR < cfg.minRR ? "RESEARCH_ONLY" : "REJECTED";
+          status = g.netRR >= 1 && g.netRR < channelMinRR(channel, cfg) ? "RESEARCH_ONLY" : "REJECTED";
           statusText = statusLabel(status);
           executionNote = "当前未通过执行硬门槛；实际开盘仍须重新检查，不因高分放宽。";
-        } else if (g.netRR < cfg.minRR) {
+        } else if (g.netRR < channelMinRR(channel, cfg)) {
           status = "RESEARCH_ONLY";
           statusText = statusLabel(status);
           executionNote = "当前成本后净赔率不足；实际开盘仍须重新检查，不能由高分抵消。";
@@ -1682,7 +1709,7 @@ const QuantCore = (() => {
     const entryGeometry = repriceGeometry(zone, open, cfg),
       riskCheck = executionRiskCheck(zone, open, cfg);
     if (!riskCheck.pass) return { status: "SKIP", reason: riskCheck.reason };
-    if (!entryGeometry.valid || entryGeometry.netRR < cfg.minRR)
+    if (!entryGeometry.valid || entryGeometry.netRR < channelMinRR(signal.channel, cfg))
       return { status: "SKIP", reason: "开盘成本后净赔率不足" };
     return { status: "ENTER", reason: null, entryGeometry, open };
   }
@@ -1877,7 +1904,7 @@ const QuantCore = (() => {
         daySignals[channel] = s;
         dayTriggers[channel] =
           !!s && s.stage === 3 && s.Q && s.E && s.geometry && s.geometry.valid &&
-          s.geometry.netRR >= cfg.minRR && s.liquidity && s.liquidity.pass;
+          s.geometry.netRR >= channelMinRR(channel, cfg) && s.liquidity && s.liquidity.pass;
       }
       const newOversold = dayTriggers.oversold && !runState.oversold.prevTriggered,
         newBreakout = dayTriggers.breakout && !runState.breakout.prevTriggered;
@@ -2610,29 +2637,28 @@ const QuantCore = (() => {
       const s = historicalSetup("breakout", b, b, DEFAULTS),
         next = new Date(Date.parse(last(b).date + "T00:00:00Z") + 864e5).toISOString().slice(0, 10),
         r = analyzeSymbol({ code: "sh600000", name: "测试", bars: b, benchmarkBars: b,
-          quote: { price: s.geometry.zoneHi + 0.01, pct: 1 }, now: new Date(next + "T00:00:00Z") });
-      return r.status === "NEXT_SESSION_PLAN" && r.statusText === "今日开盘预案·余2次" &&
-        r.primary.usedAttempts === 0 && r.primary.remainingAttempts === 2 &&
+          quote: { price: s.geometry.entryPrice, pct: 1 }, now: new Date(next + "T00:00:00Z") });
+      return r.status === "NEXT_SESSION_PLAN" && r.statusText === "今日开盘预案·余3次" &&
+        r.primary.usedAttempts === 0 && r.primary.remainingAttempts === 3 &&
         r.primary.geometry.zoneHi === s.geometry.zoneHi;
     });
-    test("突破连续两次开盘区外即窗口耗尽且不以现价回区复活", () => {
-      // v14.2 适配：突破通道自 v14.0 起有效期 3（2 次开盘窗口），窗口耗尽需连续两次区外开盘
+    test("突破连续三次开盘区外即窗口耗尽且不以现价回区复活", () => {
+      // v14.5 适配：三通道 maxAge 4（3 次开盘窗口），窗口耗尽需连续三次区外开盘
       const b = makeBreakoutSynthetic();
       for (let i = 79; i < 85; i++) b[i].low -= 0.4;
       const s = historicalSetup("breakout", b, b, DEFAULTS),
         next = new Date(Date.parse(last(b).date + "T00:00:00Z") + 864e5).toISOString().slice(0, 10),
         d2 = new Date(Date.parse(next + "T00:00:00Z") + 864e5).toISOString().slice(0, 10),
+        d3 = new Date(Date.parse(d2 + "T00:00:00Z") + 864e5).toISOString().slice(0, 10),
         open = s.geometry.zoneHi + 0.01,
-        bars2 = b.concat([
-          { date: next, open, high: open, low: open * 0.99, close: open * 0.995, volume: 1e7, amount: open * 1e7 },
-          { date: d2, open, high: open, low: open * 0.99, close: open * 0.995, volume: 1e7, amount: open * 1e7 },
-        ]),
-        now = new Date(d2 + "T12:00:00Z"),
+        outside = (d) => ({ date: d, open, high: open, low: open * 0.99, close: open * 0.995, volume: 1e7, amount: open * 1e7 }),
+        bars2 = b.concat([outside(next), outside(d2), outside(d3)]),
+        now = new Date(d3 + "T12:00:00Z"),
         r = analyzeSymbol({ code: "sh600000", name: "测试", bars: bars2, benchmarkBars: bars2,
           quote: { price: s.geometry.entryPrice, open, high: open, low: open, pct: 1, qtime: now.getTime() }, now }),
         trade = executeTrade(s, { date: next, open, high: open, low: open }, [], "A", DEFAULTS);
       return r.status === "EXPIRED" && r.statusText === "已失效·窗口耗尽" && !r.prefiltered &&
-        r.primary.usedAttempts === 2 && r.primary.remainingAttempts === 0 && trade.status === "SKIP";
+        r.primary.usedAttempts === 3 && r.primary.remainingAttempts === 0 && trade.status === "SKIP";
     });
     test("开盘条件满足转模型待结算而非盘中候选", () => {
       const b = makeBreakoutSynthetic(), s = historicalSetup("breakout", b, b, DEFAULTS),
@@ -2650,8 +2676,8 @@ const QuantCore = (() => {
           signalClose: 10, limitPct: null, bars: [],
           quote: { price: 10, open: 12, high: 12, low: 12, qtime: now.getTime() },
           market: "US", now, config: DEFAULTS });
-      return r.status === "WAIT_ENTRY" && r.statusText === "等待下次开盘·余1次" &&
-        r.usedAttempts === 1 && r.remainingAttempts === 1;
+      return r.status === "WAIT_ENTRY" && r.statusText === "等待下次开盘·余2次" &&
+        r.usedAttempts === 1 && r.remainingAttempts === 2;
     });
     test("盘前区内信号标今日开盘并保留完整窗口", () => {
       const b = makeBreakoutSynthetic(), s = historicalSetup("breakout", b, b, DEFAULTS),
@@ -2659,9 +2685,9 @@ const QuantCore = (() => {
         price = s.geometry.entryPrice,
         r = analyzeSymbol({ code: "sh600000", name: "测试", bars: b, benchmarkBars: b,
           quote: { price, pct: 1 }, now: new Date(next + "T00:00:00Z") });
-      return r.status === "NEXT_SESSION_PLAN" && r.statusText === "今日开盘预案·余2次" &&
+      return r.status === "NEXT_SESSION_PLAN" && r.statusText === "今日开盘预案·余3次" &&
         r.primary.executionHorizon === "TODAY_OPEN" && r.primary.usedAttempts === 0 &&
-        r.primary.remainingAttempts === 2;
+        r.primary.remainingAttempts === 3;
     });
     test("盘后按实际开盘结果区分已触发与窗口耗尽", () => {
       const b = makeBreakoutSynthetic(), s = historicalSetup("breakout", b, b, DEFAULTS),
@@ -2675,18 +2701,19 @@ const QuantCore = (() => {
         outside = analyzeSymbol({ code: "sh600000", name: "测试", bars: b, benchmarkBars: b,
           quote: { price: outsideSetup.geometry.entryPrice, open, high: open, low: open, pct: 1, qtime: now.getTime() }, now });
       return inside.status === "MODEL_ENTERED" && outside.status === "WAIT_ENTRY" &&
-        outside.statusText === "等待下次开盘·余1次" && outside.primary.usedAttempts === 1;
+        outside.statusText === "等待下次开盘·余2次" && outside.primary.usedAttempts === 1;
     });
-    test("回踩第二次开盘失败后窗口耗尽", () => {
-      const now = new Date("2026-10-27T20:00:00Z"),
-        bars = ["2026-10-26", "2026-10-27"].map((date) => ({ date, open: 12, high: 12, low: 12, close: 12, volume: 1 })),
+    test("回踩第三次开盘失败后窗口耗尽", () => {
+      // v14.5：maxAge 4 → 3 次开盘窗口，需三次区外开盘才耗尽
+      const now = new Date("2026-10-28T20:00:00Z"),
+        bars = ["2026-10-26", "2026-10-27", "2026-10-28"].map((date) => ({ date, open: 12, high: 12, low: 12, close: 12, volume: 1 })),
         r = signalLifecycle({ channel: "pullback", triggerDate: "2026-10-23",
           geometry: { valid: true, zoneLo: 9, zoneHi: 11, stop: 8, target: 16 },
           signalClose: 10, limitPct: null, bars,
           quote: { price: 12, open: 12, high: 12, low: 12, qtime: now.getTime() },
           market: "US", now, config: DEFAULTS });
       return r.status === "EXPIRED" && r.statusText === "已失效·窗口耗尽" &&
-        r.usedAttempts === 2 && r.remainingAttempts === 0;
+        r.usedAttempts === 3 && r.remainingAttempts === 0;
     });
     test("等待期间收盘破位立即取消剩余窗口", () => {
       const now = new Date("2026-10-27T20:00:00Z"),
@@ -2852,7 +2879,7 @@ const QuantCore = (() => {
           signalClose: 10, limitPct: 10, bars: [],
           quote: { price: 10, open: 10, high: 10, low: 10, qtime: now.getTime() },
           market: "A", now, config: DEFAULTS });
-      return r.status === "NEXT_SESSION_PLAN" && r.usedAttempts === 0 && r.remainingAttempts === 2;
+      return r.status === "NEXT_SESSION_PLAN" && r.usedAttempts === 0 && r.remainingAttempts === 3;
     });
     test("美股触发日盘后区外开盘不错误失效", () => {
       const now = new Date("2026-10-27T20:00:00Z"),
@@ -2861,7 +2888,7 @@ const QuantCore = (() => {
           signalClose: 10, limitPct: null, bars: [],
           quote: { price: 12, open: 12, high: 12, low: 12, qtime: now.getTime() },
           market: "US", now, config: DEFAULTS });
-      return r.status === "NEXT_SESSION_PLAN" && r.usedAttempts === 0 && r.remainingAttempts === 2;
+      return r.status === "NEXT_SESSION_PLAN" && r.usedAttempts === 0 && r.remainingAttempts === 3;
     });
     test("回放显式排除杠杆反向ETF", () => {
       const r = replaySymbol({ code: "usSOXS", name: "SOXS", bars: makeSynthetic(160), market: "US" });
@@ -3177,12 +3204,32 @@ const QuantCore = (() => {
       const a = intradayAdvice(o);
       return a.actionable && a.state === "ACTIONABLE";
     });
+    // v14.5 回归：RSI 恢复触发器——收复事件日收盘、RSI 修复至≥40，但收盘仍在 MA5 下方。
+    // 构造：84 根平台 + 单日暴跌 -14%（z≈-14，事件唯一）+ 4 根小阳企稳 + 末根收复事件收盘
+    // 但位于 MA5 下方的阴线；旧触发器（穿头破脚/金叉且站上MA5）在此形态下永不触发。
+    test("RSI恢复触发器：收复事件收盘但未过MA5仍触发", () => {
+      const out = [], d0 = Date.parse("2026-01-01T00:00:00Z"),
+        push = (c, o, h, l) => { out.push({ date: new Date(d0 + out.length * 864e5).toISOString().slice(0, 10), open: o, high: h, low: l, close: c, volume: 1e6, amount: c * 1e6 }); };
+      for (let i = 0; i < 84; i++) push(10 + 0.03 * Math.sin(i * 1.3), 10, 10.06, 9.94);
+      push(8.5, 9.9, 9.95, 8.45);
+            push(8.8, 8.5, 8.860000000000001, 8.46); push(9.1, 8.8, 9.16, 8.760000000000002); push(9.4, 9.1, 9.46, 9.06); push(9.7, 9.4, 9.76, 9.360000000000001);
+      push(9.2, 9.7, 9.76, 9.16);
+      const s = historicalSetup("oversold", out, null, DEFAULTS, "A", "sh600000");
+      return s.stage === 3 && s.metrics.rsiRecover === true && s.metrics.close < s.metrics.ma5;
+    });
+    // v14.5 回归：通道级净赔率门槛——同一几何（净赔率≈1.41），突破通道拒绝、超跌通道放行。
+    test("通道级净赔率门槛：突破1.5拒绝而超跌1.2放行", () => {
+      const geometry = { valid: true, zoneLo: 9, zoneHi: 11, stop: 8, target: 12.9, atrValue: 1, entryPrice: 10 },
+        entry = { date: "2026-10-27", open: 10, high: 10.1, low: 9.9, close: 10, volume: 1e6, amount: 1e7 },
+        skip = openingDecision({ geometry, signalClose: 10, limitPct: null, channel: "breakout" }, entry, "A", DEFAULTS),
+        enter = openingDecision({ geometry, signalClose: 10, limitPct: null, channel: "oversold" }, entry, "A", DEFAULTS);
+      return skip.status === "SKIP" && skip.reason === "开盘成本后净赔率不足" && enter.status === "ENTER";
+    });
     return tests;
   }
   return {
     VERSION,
     STRATEGY_VERSION,
-    INTRADAY_MODEL,
     DEFAULTS,
     CHANNELS,
     clamp,
@@ -3195,6 +3242,7 @@ const QuantCore = (() => {
     historicalSetup,
     breakoutPreview,
     zoneBestRR,
+    channelMinRR,
     executionRiskCheck,
     archiveReason,
     analyzeSymbol,
@@ -3204,7 +3252,6 @@ const QuantCore = (() => {
     executeTradeWindow,
     executeIntradayTrade,
     summarizeIntraday,
-    sessionElapsedMinutes,
     intradayPlanKey,
     completedBars,
     latestCompletedDate,

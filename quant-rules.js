@@ -1,4 +1,4 @@
-/* Quant v14.3 · 规则与参数中心（quant-rules.js）
+/* Quant v14.5 · 规则与参数中心（quant-rules.js）
    改规则只动这里（参数），或新建 rule-*.js 插件（否决门/评分修正），
    再到 quant-main.js 的 RULE_MANIFEST 加一行引用即可，内核不动。
 
@@ -21,12 +21,25 @@
       analyzeSymbol 与回放层统一增量特征。日线三通道判定未动，但盘中参数为行为级变更，
       STRATEGY_VERSION 升 OPENING_DAILY_V6、盘中模型升 INTRADAY_V3；参数指纹含全部 DEFAULTS 键，
       旧档案按指纹自动隔离、不删除、不混算。
+   ⑦ v14.4（死代码清理，不改任何信号行为）：删除 ui.js 死函数 actionHTML、intradayHTML 的
+      未使用参数 detail、state.intradayCapturing 死字段；观察态详情不再渲染无意义的
+      “信号 —”占位文本；内核导出收敛（移除外部无人引用的 INTRADAY_MODEL/sessionElapsedMinutes
+      导出项，内部仍在用）；state.sessionKey 补入声明。策略版本维持 OPENING_DAILY_V6。
+   ⑧ v14.5（超跌通道放宽＋通道级赔率门槛，行为级）：① 新增 RSI 恢复触发器（事件日 RSI≤30 →
+      回升≥40 且收复事件日收盘，不要求收复 MA5）；② 事件窗口 10→15 完成日；③ 新低缓冲
+      0.2→0.3 ATR、企稳量 1.1→1.25、下影 1.5→1.2、ATR 分级 2.0/1.0→2.5/1.2；④ 净赔率门槛按
+      通道分级（超跌 1.2、突破/回踩 1.5），预筛/开盘判定/盘中七门/回放统一走 channelMinRR。
+      STRATEGY_VERSION 升 OPENING_DAILY_V7、盘中模型升 INTRADAY_V4，旧档案按指纹自动隔离。
+   ⑨ v14.5 增补（外部评审采纳，行为级，同属 V7/V4 批次）：企稳分级阈值校准为 4.0/2.0；突破量能 1.2→1.1
+      参数化 breakoutMinVolRatio；突破入场区上沿 0.35→0.5 ATR 参数化 breakoutZoneHiAtr（评审建议
+      +0.8~1.0，但上沿过宽会系统性压垮净赔率门槛，取折中）；三通道开盘窗口 2→3 次（maxAge 3→4）；
+      盘中确认间隔 45→30 秒、确认窗口 1800→3600 秒。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v14.3",
-  STRATEGY_VERSION: "OPENING_DAILY_V6",
-  INTRADAY_MODEL: "INTRADAY_V3",
+  VERSION: "v14.5",
+  STRATEGY_VERSION: "OPENING_DAILY_V7",
+  INTRADAY_MODEL: "INTRADAY_V4",
   DEFAULTS: {
     minBars: 80,
     minAmountA: 5e7,
@@ -40,19 +53,31 @@ globalThis.QRULES = {
     // 共用 A股阈值会使美股盘中七门恒为 STALE、盘中执行名存实亡。
     intradayQuoteMaxAgeSecUS: 1200,
     intradayConfirmSamples: 2,
-    intradayMinSampleGapSec: 45,
-    intradayConfirmWindowSec: 1800,
+    intradayMinSampleGapSec: 30,
+    intradayConfirmWindowSec: 3600,
     intradaySampleMaxAgeSec: 3600,
     // v14.3：0.8→0.65。均匀成交下分时曲线 dayFrac+0.13·sin(π·dayFrac) 全天仅 0.71~0.73，
     // 旧门槛几乎只在尾盘放行；新门槛仍高于均匀基准，属"偏积极"而非放任。
     intradayMinVolumePace: 0.65,
     minStopAtr: 0.5,
     maxStopAtr: 2.5,
+    // v14.5 超跌通道放宽（Monte Carlo 40万评估点定位的杀信号闸门：62% 的②阶段候选死于
+    // “未收复MA5”、38% 死于“K线强度不足”）——全部参数化，随参数指纹自动隔离旧档案：
+    oversoldLowBufferAtr: 0.3,          // 新低判定缓冲 0.2→0.3 ATR：允许更深的回抽而不破坏结构
+    oversoldStableVolMult: 1.25,        // 企稳 bar 量条件 1.1→1.25 倍20日均量
+    oversoldStableShadowMult: 1.2,      // 企稳 bar 下影条件 1.5→1.2 倍实体
+    oversoldStableBarsAtrPct: [4.0, 2.0], // ATR% 分级阈值（评审校准 2.0/1.0→4.0/2.0）：原档位名存实亡
+    oversoldRecoverRsi: 40,             // RSI 恢复触发器：事件日 RSI≤30 后回升至≥40 且收复事件日收盘
+    // 通道级净赔率门槛：超跌反弹目标天然偏近（prevHigh20/MA20 封顶），与突破共用 1.5 会被
+    // 预筛系统性误杀；按通道分级后仍高于 1.0，属“放宽但有界”。
+    channelMinRR: { oversold: 1.2, pullback: 1.5, breakout: 1.5 },
+    breakoutMinVolRatio: 1.1,           // 突破量能门槛 1.2→1.1（评审：原硬编码杀掉 45.7% 价格突破）
+    breakoutZoneHiAtr: 0.5,             // 突破入场区上沿 0.35→0.5 ATR（评审建议 0.8~1.0 会压垮净赔率，取折中）
   },
   CHANNELS: {
-    oversold: { name: "超跌反弹", maxAge: 3 },
-    pullback: { name: "趋势回踩", maxAge: 3 },
-    breakout: { name: "突破确认", maxAge: 3 },
+    oversold: { name: "超跌反弹", maxAge: 4 },
+    pullback: { name: "趋势回踩", maxAge: 4 },
+    breakout: { name: "突破确认", maxAge: 4 },
   },
   DAILY_EXCLUDED: [
     "usSOXS",

@@ -1,4 +1,4 @@
-/* Quant v14.3 · quant-main.js
+/* Quant v14.5 · quant-main.js
    启动与事件层：共享状态、全局工具、模块加载校验、规则插件加载（RULE_MANIFEST）、事件绑定、boot。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → 本文件（最后）。 */
 "use strict";
@@ -73,13 +73,13 @@ const state = {
     autoRefresh: false,
     autoMinutes: 5,
     lastRefreshAt: 0,
+    sessionKey: null,
     intradayLoading: false,
     intradaySeq: 0,
     lastIntradayAt: 0,
     intradayMessage: "尚未执行独立报价刷新",
     intradaySamples: {},
     intradayRecords: [],
-    intradayCapturing: false,
     marketHealth: { A: null, US: null },
     loadStartedAt: 0,
     lastReplay: null,
