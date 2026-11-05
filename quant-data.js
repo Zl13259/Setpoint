@@ -1,4 +1,4 @@
-/* Quant v14.6 · quant-data.js
+/* Quant v14.7 · quant-data.js
    数据适配层：东财/腾讯/新浪 报价、日K、搜索、缓存。被 quant-main.js 启动流程调用；不直接操作判定。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";

@@ -1,4 +1,4 @@
-/* Quant v14.6 · 规则与参数中心（quant-rules.js）
+/* Quant v14.7 · 规则与参数中心（quant-rules.js）
    改规则只动这里（参数），或新建 rule-*.js 插件（否决门/评分修正），
    再到 quant-main.js 的 RULE_MANIFEST 加一行引用即可，内核不动。
 
@@ -39,10 +39,15 @@
       （过滤后为空→自动恢复默认池+显式日志/提示，杜绝静默 0/0）；③ 渲染层与台账层调用逐个容错；
       ④ 加载中状态在覆盖指示器上显式显示。全部 DEFAULTS 与判定逻辑未动，参数指纹不变、
       前向档案延续 V7 簇。
+   ⑪ v14.7（渲染层热修复，纯展示，不改任何信号行为，策略维持 V7）：v14.4 清理死代码时删除了
+      intradayHTML 的未使用参数 detail，但漏删函数体内的引用（checks = detail && ...）；
+      严格模式下渲染第一行即抛 ReferenceError，被 v14.6 的渲染容错吞为日志——后台数据其实
+      加载完成，但信号台 DOM 写不进去，外部表现为"数据获取不到"。本版删除该残留引用；
+      DEFAULTS、判定逻辑、策略版本均未动，参数指纹不变、前向档案延续 V7 簇。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v14.6",
+  VERSION: "v14.7",
   STRATEGY_VERSION: "OPENING_DAILY_V7",
   INTRADAY_MODEL: "INTRADAY_V4",
   DEFAULTS: {

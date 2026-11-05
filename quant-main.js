@@ -1,4 +1,4 @@
-/* Quant v14.6 · quant-main.js
+/* Quant v14.7 · quant-main.js
    启动与事件层：共享状态、全局工具、模块加载校验、规则插件加载（RULE_MANIFEST）、事件绑定、boot。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → 本文件（最后）。 */
 "use strict";

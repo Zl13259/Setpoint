@@ -1,4 +1,4 @@
-/* Quant v14.6 · quant-ui.js
+/* Quant v14.7 · quant-ui.js
    渲染层：信号台、详情、回放汇总、诊断等全部 DOM 渲染。只读 state，不改判定逻辑。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -398,7 +398,7 @@ function intradayHTML(r) {
       progressLine = gp && gp.total
         ? `<span class="small muted" style="display:block;margin-top:2px">七门进度 ${gp.passed}/${gp.total}｜${gp.failed.length ? "距触发还差：" + gp.failed.map(esc).join("、") : "全部通过"}</span>`
         : "",
-      checks = detail && a.checks && a.checks.length
+      checks = a.checks && a.checks.length
         ? `<span class="intraday-checks">${a.checks.map((x) => `<span class="${x.pass ? "ok" : "warn"}">${x.pass ? "通过" : "未过"}·${esc(x.label)}：${esc(x.detail)}</span>`).join("")}</span>`
         : "";
     const simTag = a.simulated ? '<span class="badge research">收盘模拟</span> ' : "";
