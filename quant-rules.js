@@ -1,4 +1,4 @@
-/* Quant v14.7 · 规则与参数中心（quant-rules.js）
+/* Quant v14.8 · 规则与参数中心（quant-rules.js）
    改规则只动这里（参数），或新建 rule-*.js 插件（否决门/评分修正），
    再到 quant-main.js 的 RULE_MANIFEST 加一行引用即可，内核不动。
 
@@ -44,12 +44,22 @@
       严格模式下渲染第一行即抛 ReferenceError，被 v14.6 的渲染容错吞为日志——后台数据其实
       加载完成，但信号台 DOM 写不进去，外部表现为"数据获取不到"。本版删除该残留引用；
       DEFAULTS、判定逻辑、策略版本均未动，参数指纹不变、前向档案延续 V7 簇。
+   ⑫ v14.8（超跌通道灵敏度修复，行为级，用户裁决 2026-11-06）：① 企稳分级从触发硬门降级为
+      评分/警示项——v13.3 硬门实测在 V 型 regime 系统性延迟（触发根不计入企稳数，事件期 ATR≥4%
+      时大跌后最早第 4 个交易日才触发），入场抬高后撞 2.5 ATR 上限＋目标压缩，整批灭绝（11-05
+      张江/有研/宁德案例）。触发恢复为"无新低＋≥1 根企稳证据"；requiredStable 保留于 metrics
+      供 Q 评分（达标 +10）与"建议 N 根"提示。超跌定位：系统负责筛出，人工评估买不买。
+      ② 止损上限按通道分级 channelMaxStopAtr（超跌 3.5、突破/回踩 2.5）——超跌锚定事件低点，
+      天然宽于突破，2.5 一刀切会重演"触发即被毙"（v12.8 大族激光 2.54 ATR 实证）。
+      STRATEGY_VERSION 升 OPENING_DAILY_V8、盘中模型升 INTRADAY_V5（盘中触发探测同用 detectImpl）；
+      旧档案按指纹自动隔离不删除。2026-11-05"等 v12.8 前向到期再裁决"的约定由 2026-11-06
+      用户指令覆盖；11-18 对照实验继续（legacy 簇隔离，成为改前/改后 A/B）。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v14.7",
-  STRATEGY_VERSION: "OPENING_DAILY_V7",
-  INTRADAY_MODEL: "INTRADAY_V4",
+  VERSION: "v14.8",
+  STRATEGY_VERSION: "OPENING_DAILY_V8",
+  INTRADAY_MODEL: "INTRADAY_V5",
   DEFAULTS: {
     minBars: 80,
     minAmountA: 5e7,
@@ -76,13 +86,16 @@ globalThis.QRULES = {
     oversoldLowBufferAtr: 0.3,          // 新低判定缓冲 0.2→0.3 ATR：允许更深的回抽而不破坏结构
     oversoldStableVolMult: 1.25,        // 企稳 bar 量条件 1.1→1.25 倍20日均量
     oversoldStableShadowMult: 1.2,      // 企稳 bar 下影条件 1.5→1.2 倍实体
-    oversoldStableBarsAtrPct: [4.0, 2.0], // ATR% 分级阈值（评审校准 2.0/1.0→4.0/2.0）：原档位名存实亡
+    oversoldStableBarsAtrPct: [4.0, 2.0], // ATR% 分级阈值（评审校准 2.0/1.0→4.0/2.0）：v14.8 起仅作评分/建议，不作触发硬门
     oversoldRecoverRsi: 40,             // RSI 恢复触发器：事件日 RSI≤30 后回升至≥40 且收复事件日收盘
     // 通道级净赔率门槛：超跌反弹目标天然偏近（prevHigh20/MA20 封顶），与突破共用 1.5 会被
     // 预筛系统性误杀；按通道分级后仍高于 1.0，属“放宽但有界”。
     channelMinRR: { oversold: 1.2, pullback: 1.5, breakout: 1.5 },
     breakoutMinVolRatio: 1.1,           // 突破量能门槛 1.2→1.1（评审：原硬编码杀掉 45.7% 价格突破）
     breakoutZoneHiAtr: 0.5,             // 突破入场区上沿 0.35→0.5 ATR（评审建议 0.8~1.0 会压垮净赔率，取折中）
+    // v14.8：止损上限按通道分级——超跌锚定事件低点，天然宽于突破；2.5 一刀切会错杀
+    // （v12.8 大族激光止损 2.54 ATR 实证）。仓位=风险预算÷止损幅度，宽止损自动缩仓，R 口径不变。
+    channelMaxStopAtr: { oversold: 3.5, pullback: 2.5, breakout: 2.5 },
   },
   CHANNELS: {
     oversold: { name: "超跌反弹", maxAge: 4 },

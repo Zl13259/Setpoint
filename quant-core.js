@@ -30,6 +30,7 @@ const QuantCore = (() => {
     channelMinRR: { oversold: 1.2, pullback: 1.5, breakout: 1.5 },
     breakoutMinVolRatio: 1.1,
     breakoutZoneHiAtr: 0.5,
+    channelMaxStopAtr: { oversold: 3.5, pullback: 2.5, breakout: 2.5 },
   });
   const DEFAULTS = Object.freeze({ ...BUILTIN_DEFAULTS, ...(QRULES.DEFAULTS || {}) });
   const CHANNELS = QRULES.CHANNELS || {
@@ -320,7 +321,9 @@ const QuantCore = (() => {
       const stable = sc(
         (m.noNewLow ? 40 : 0) +
           Math.min(3, m.stableCount) * 10 +
-          (m.volContraction ? 30 : 0),
+          (m.volContraction ? 30 : 0) +
+          // v14.8：企稳分级达标加分——分级从硬门降级为评分项后，信息保留在 Q 里。
+          (m.stableCount >= m.requiredStable ? 10 : 0),
       );
       const confirm = sc(
         (m.breakPrevHigh ? 45 : 15) +
@@ -470,9 +473,13 @@ const QuantCore = (() => {
           f.rsi[event] !== null && f.rsi[event] !== undefined &&
           f.rsi[event] <= 30 && f.rsi[i] >= c.oversoldRecoverRsi &&
           x.close > eb.close,
+        // v14.8：企稳分级从触发硬门降级为评分/警示项——v13.3 硬门实测在 V 型 regime 系统性延迟
+        // （当前触发根不计入企稳数，事件期 ATR≥4% 时大跌后最早第 4 个交易日才触发），入场抬高后
+        // 撞止损上限＋目标压缩、整批灭绝（11-05 张江/有研/宁德案例）。触发恢复为"无新低＋≥1 根
+        // 企稳证据"；requiredStable 保留于 metrics 供 Q 评分（达标 +10）与"建议 N 根"提示。
         trigger =
           noNewLow &&
-          stableBeforeTrigger >= requiredStable &&
+          stableBeforeTrigger >= 1 &&
           (breakPrevHigh || cross5 || rsiRecover) &&
           (x.close > f.ma5[i] || rsiRecover);
       Object.assign(base.metrics, {
@@ -503,16 +510,15 @@ const QuantCore = (() => {
       });
       base.evidence = [
         `超跌日 ${eb.date}，RSI ${round(f.rsi[event], 1)}`,
-        `其后企稳 bar ${stableBeforeTrigger} 根（事件期 ATR 峰值 ${atrPctEvt === null ? "—" : round(atrPctEvt, 1)}%，要求 ≥${requiredStable} 根）`,
+        `其后企稳 bar ${stableBeforeTrigger} 根（事件期 ATR 峰值 ${atrPctEvt === null ? "—" : round(atrPctEvt, 1)}%；分级建议 ≥${requiredStable} 根，不足则 Q 企稳分扣分，抢跑风险由人工评估）`,
       ];
-      base.stage = trigger ? 3 : stableBeforeTrigger >= requiredStable && noNewLow ? 2 : 1;
+      // v14.8：企稳分级降级后，stage② = 无新低 且 已有 ≥1 根企稳证据（不要求分级达标）。
+      base.stage = trigger ? 3 : noNewLow && stableBeforeTrigger >= 1 ? 2 : 1;
       if (!trigger)
         base.missing = [
           !noNewLow
             ? "结构未修复：仍在破坏超跌低点，等待重新筑底"
-            : stableBeforeTrigger < requiredStable
-              ? `企稳证据不足：需 ${requiredStable} 根企稳 bar，现有 ${stableBeforeTrigger} 根（高波动品种要求更多企稳确认）`
-              : "尚未出现反弹触发",
+            : "尚未出现反弹触发（无新低且有企稳证据，等收复前高／收复 MA5／RSI 恢复）",
         ];
       if (base.stage === 3) {
         base.Q = scoreQ(channel, base.metrics);
@@ -852,18 +858,24 @@ const QuantCore = (() => {
     const z = repriceGeometry(g, +g.zoneLo, cfg);
     return z && Number.isFinite(z.netRR) ? z.netRR : null;
   }
-  function executionRiskCheck(g, price, cfg) {
+  // v14.8：止损上限按通道分级（channelMaxStopAtr）——超跌锚定事件低点，天然宽于突破通道，
+  // 2.5 ATR 一刀切会系统性错杀超跌信号；未传 channel 时回退全局 maxStopAtr。
+  function executionRiskCheck(g, price, cfg, channel = null) {
     const c = { ...DEFAULTS, ...(cfg || {}) };
     if (!g || !finite(g.atrValue) || +g.atrValue <= 0)
-      return { pass: true, unavailable: true, stopAtr: null, reason: null };
-    const stopAtr = (+price - +g.stop) / +g.atrValue;
+      return { pass: true, unavailable: true, stopAtr: null, reason: null, maxAtr: c.maxStopAtr };
+    const maxAtr =
+        channel && c.channelMaxStopAtr && Number.isFinite(c.channelMaxStopAtr[channel])
+          ? c.channelMaxStopAtr[channel]
+          : c.maxStopAtr,
+      stopAtr = (+price - +g.stop) / +g.atrValue;
     if (!Number.isFinite(stopAtr) || stopAtr <= 0)
-      return { pass: false, stopAtr, reason: "止损不在入场价下方" };
+      return { pass: false, stopAtr, reason: "止损不在入场价下方", maxAtr };
     if (stopAtr < c.minStopAtr)
-      return { pass: false, stopAtr, reason: `止损过近：${round(stopAtr, 2)} ATR＜${round(c.minStopAtr, 1)} ATR，易被日常波动扫损` };
-    if (stopAtr > c.maxStopAtr)
-      return { pass: false, stopAtr, reason: `止损过宽：${round(stopAtr, 2)} ATR＞${round(c.maxStopAtr, 1)} ATR，不移动结构止损，放弃执行` };
-    return { pass: true, stopAtr, reason: null };
+      return { pass: false, stopAtr, reason: `止损过近：${round(stopAtr, 2)} ATR＜${round(c.minStopAtr, 1)} ATR，易被日常波动扫损`, maxAtr };
+    if (stopAtr > maxAtr)
+      return { pass: false, stopAtr, reason: `止损过宽：${round(stopAtr, 2)} ATR＞${round(maxAtr, 1)} ATR，不移动结构止损，放弃执行`, maxAtr };
+    return { pass: true, stopAtr, reason: null, maxAtr };
   }
   function archiveReason(status, g, price) {
     if (status === "MODEL_ENTERED" || !g || !finite(price) || +price <= 0) return null;
@@ -1135,7 +1147,7 @@ const QuantCore = (() => {
       inZone = price >= zoneLoEff && price <= zoneHiEff,
       structurePass = price > g.stop && !(validPositive(quote.low) && +quote.low <= g.stop),
       rrPass = Number.isFinite(rr) && rr >= rrFloor,
-      riskCheck = executionRiskCheck(g, price, cfg),
+      riskCheck = executionRiskCheck(g, price, cfg, p.channel),
       // v14.3：严格使用行情源昨收；缺失时跳过涨停可成交检查，不回退冻结 triggerPrice——
       // 冻结价可能陈旧数日，用它判断"接近涨停"会把正常价位误判为不可成交。
       prevClose = validPositive(quote.prevClose) ? +quote.prevClose : null,
@@ -1154,7 +1166,7 @@ const QuantCore = (() => {
     check("structure", "结构有效", structurePass, structurePass ? "现价与日内低点未触及冻结止损" : "日内已触及冻结失效锚点");
     check("zone", "价格在冻结入场区", inZone, `${round(price, 4)} / ${round(zoneLoEff, 4)}～${round(zoneHiEff, 4)}${driftNote}`);
     check("rr", "成本后净赔率", rrPass, `${Number.isFinite(rr) ? round(rr, 2) : "—"}∶1 / 门槛 ${round(rrFloor, 1)}∶1`);
-    check("riskDistance", "止损距离", riskCheck.pass, riskCheck.reason || (riskCheck.unavailable ? "旧档案缺少ATR，沿用原几何" : `${round(riskCheck.stopAtr, 2)} ATR / 允许 ${round(cfg.minStopAtr, 1)}～${round(cfg.maxStopAtr, 1)} ATR`));
+    check("riskDistance", "止损距离", riskCheck.pass, riskCheck.reason || (riskCheck.unavailable ? "旧档案缺少ATR，沿用原几何" : `${round(riskCheck.stopAtr, 2)} ATR / 允许 ${round(cfg.minStopAtr, 1)}～${round(riskCheck.maxAtr ?? cfg.maxStopAtr, 1)} ATR`));
     check("tradable", "可成交性", tradablePass, nearLimitUp ? "接近涨停且位于日内高价，无法确认可成交" : "未发现当前报价级成交拦截");
     check("volume", "当日量能节奏", volumePass, Number.isFinite(volumePace) ? `${round(volumePace, 2)}× / 初始门槛 ${round(cfg.intradayMinVolumePace, 2)}×` : "缺少成交额、20日基准或有效交易时长");
 
@@ -1511,7 +1523,7 @@ const QuantCore = (() => {
         triggerGeometry = s.geometry,
         g = repriceGeometry(triggerGeometry, base.price, cfg),
         bestZoneRR = zoneBestRR(triggerGeometry, cfg),
-        zoneRiskCheck = channel === "pullback" ? { pass: true } : executionRiskCheck(triggerGeometry, triggerGeometry.zoneLo, cfg),
+        zoneRiskCheck = channel === "pullback" ? { pass: true } : executionRiskCheck(triggerGeometry, triggerGeometry.zoneLo, cfg, channel),
         rrPrefail = !(Number.isFinite(bestZoneRR) && bestZoneRR >= channelMinRR(channel, cfg)),
         prefiltered = channel !== "pullback" && (rrPrefail || !zoneRiskCheck.pass),
         limitPct = market === "A" ? priceLimit(o.code, o.name) : null,
@@ -1707,7 +1719,7 @@ const QuantCore = (() => {
     if (open < zone.zoneLo || open > zone.zoneHi)
       return { status: "SKIP", reason: "开盘不在入场区" };
     const entryGeometry = repriceGeometry(zone, open, cfg),
-      riskCheck = executionRiskCheck(zone, open, cfg);
+      riskCheck = executionRiskCheck(zone, open, cfg, signal.channel);
     if (!riskCheck.pass) return { status: "SKIP", reason: riskCheck.reason };
     if (!entryGeometry.valid || entryGeometry.netRR < channelMinRR(signal.channel, cfg))
       return { status: "SKIP", reason: "开盘成本后净赔率不足" };
@@ -3224,6 +3236,27 @@ const QuantCore = (() => {
         skip = openingDecision({ geometry, signalClose: 10, limitPct: null, channel: "breakout" }, entry, "A", DEFAULTS),
         enter = openingDecision({ geometry, signalClose: 10, limitPct: null, channel: "oversold" }, entry, "A", DEFAULTS);
       return skip.status === "SKIP" && skip.reason === "开盘成本后净赔率不足" && enter.status === "ENTER";
+    });
+    // v14.8 回归：企稳分级降级为评分/警示项——高波动事件（requiredStable=3）未攒够分级根数
+    // 时，只要无新低＋有企稳证据＋出现触发器，仍应触发（v13.3 硬门 V 型延迟教训）。
+    test("超跌企稳不足分级数即触发（分级降级为评分项）", () => {
+      const out = [], d0 = Date.parse("2026-01-01T00:00:00Z"),
+        push = (c, o, h, l) => { out.push({ date: new Date(d0 + out.length * 864e5).toISOString().slice(0, 10), open: o, high: h, low: l, close: c, volume: 1e6, amount: c * 1e6 }); };
+      for (let i = 0; i < 84; i++) push(10 + 0.03 * Math.sin(i * 1.3), 10, 10.06, 9.94);
+      push(7.0, 9.9, 9.95, 6.95);   // 事件日：暴跌约 30%，事件期 ATR% ≥4% → requiredStable=3
+      push(7.6, 7.0, 7.7, 6.96);    // 企稳 bar 1（收阳、未破低点缓冲）
+      push(8.2, 7.6, 8.3, 7.5);     // 企稳 bar 2
+      push(9.2, 8.2, 9.3, 8.1);     // 触发日：阳线收复前高 8.3 且站上 MA5（仅 2 根企稳 < 要求的 3 根）
+      const s = historicalSetup("oversold", out, null, DEFAULTS, "A", "sh600000");
+      return s.stage === 3 && s.metrics.stableCount === 2 && s.metrics.requiredStable === 3;
+    });
+    // v14.8 回归：止损上限按通道分级——3.2 ATR 的止损，超跌放行、突破拒绝。
+    test("止损上限按通道分级：超跌放宽突破不变", () => {
+      const geometry = { valid: true, zoneLo: 9, zoneHi: 11, stop: 6.8, target: 20, atrValue: 1, entryPrice: 10 },
+        entry = { date: "2026-10-27", open: 10, high: 10.1, low: 9.9, close: 10, volume: 1e6, amount: 1e7 },
+        enter = openingDecision({ geometry, signalClose: 10, limitPct: null, channel: "oversold" }, entry, "A", DEFAULTS),
+        skip = openingDecision({ geometry, signalClose: 10, limitPct: null, channel: "breakout" }, entry, "A", DEFAULTS);
+      return enter.status === "ENTER" && skip.status === "SKIP" && skip.reason.includes("止损过宽");
     });
     return tests;
   }
