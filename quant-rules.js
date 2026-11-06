@@ -54,12 +54,19 @@
       STRATEGY_VERSION 升 OPENING_DAILY_V8、盘中模型升 INTRADAY_V5（盘中触发探测同用 detectImpl）；
       旧档案按指纹自动隔离不删除。2026-11-05"等 v12.8 前向到期再裁决"的约定由 2026-11-06
       用户指令覆盖；11-18 对照实验继续（legacy 簇隔离，成为改前/改后 A/B）。
+   ⑬ v14.9（事件锚定修复，行为级）：锚点从"窗口内 Z 值最深日"改为"窗口内满足超跌门槛
+      （RSI≤30／Z≤-2／5日跌≥12%）的日子中低点最低的那天"——旧逻辑下新低点出现后旧锚点
+      赖在 16 根K线窗口内，"结构未修复"门最长滞后约 15 个交易日才重新锚定（10-15 Z 最深
+      vs 11-03 低点更低的活锁案例，五只票卡阶段①）；低点锚定让新低当日即重锚，滞后压到
+      1~2 天。Z 值仍由 metrics.eventZ 供 Q 评分。连锁：止损锚随实际最低点下移（更宽），
+      仓位自动缩小。STRATEGY_VERSION 升 OPENING_DAILY_V9、盘中模型升 INTRADAY_V6；
+      旧档案按指纹自动隔离不删除。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v14.8",
-  STRATEGY_VERSION: "OPENING_DAILY_V8",
-  INTRADAY_MODEL: "INTRADAY_V5",
+  VERSION: "v14.9",
+  STRATEGY_VERSION: "OPENING_DAILY_V9",
+  INTRADAY_MODEL: "INTRADAY_V6",
   DEFAULTS: {
     minBars: 80,
     minAmountA: 5e7,

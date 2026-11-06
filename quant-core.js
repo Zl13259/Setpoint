@@ -426,9 +426,12 @@ const QuantCore = (() => {
         metrics: {},
       };
     if (channel === "oversold") {
+      // v14.9：锚点改为"窗口内满足超跌门槛的日子中、低点最低的那天"——旧逻辑选 Z 值最深日，
+      // 新低点出现后旧锚点赖在 16 根窗口内，"结构未修复"门最长滞后约 15 个交易日才重新锚定
+      // （10-15 Z 最深 vs 11-03 低点更低的活锁案例）。低点锚定让新低当日即完成重锚，
+      // 滞后压到 1~2 天。Z 值仍由 metrics.eventZ 记录，供 Q 下跌衰竭评分。
       let event = -1,
-        eventZ = null;
-      // v14.5：事件窗口 10→15 个完成日——崩盘后筑底常需一周以上，旧窗口在反弹触发前事件就过期。
+        anchorLow = null;
       for (let j = Math.max(20, n - 16); j < n; j++) {
         const z = f.rsi[j],
           slice = b.slice(j - 19, j + 1),
@@ -436,9 +439,9 @@ const QuantCore = (() => {
           sd = Math.sqrt(mean(slice.map((y) => (y.close - mu) ** 2))),
           zz = sd ? (b[j].close - mu) / sd : 0,
           drop = j >= 5 ? (b[j].close / b[j - 5].close - 1) * 100 : 0;
-        if ((z <= 30 || zz <= -2 || drop <= -12) && (eventZ === null || zz < eventZ)) {
+        if ((z <= 30 || zz <= -2 || drop <= -12) && (anchorLow === null || b[j].low < anchorLow)) {
           event = j;
-          eventZ = zz;
+          anchorLow = b[j].low;
         }
       }
       if (event < 0) {
@@ -3257,6 +3260,22 @@ const QuantCore = (() => {
         enter = openingDecision({ geometry, signalClose: 10, limitPct: null, channel: "oversold" }, entry, "A", DEFAULTS),
         skip = openingDecision({ geometry, signalClose: 10, limitPct: null, channel: "breakout" }, entry, "A", DEFAULTS);
       return enter.status === "ENTER" && skip.status === "SKIP" && skip.reason.includes("止损过宽");
+    });
+    // v14.9 回归：事件锚定跟随最低点——第二波新低（Z 较浅但低点更低）当日即重新锚定，
+    // 不再等旧锚点滑出 16 根窗口（旧逻辑最长滞后约 15 个交易日）。
+    test("事件锚定跟随最低点：第二波新低当日重锚并触发", () => {
+      const out = [], d0 = Date.parse("2026-01-01T00:00:00Z"),
+        push = (c, o, h, l) => { out.push({ date: new Date(d0 + out.length * 864e5).toISOString().slice(0, 10), open: o, high: h, low: l, close: c, volume: 1e6, amount: c * 1e6 }); };
+      for (let i = 0; i < 74; i++) push(10 + 0.03 * Math.sin(i * 1.3), 10, 10.06, 9.94);
+      push(9.0, 9.9, 9.95, 8.95);   // 第一波 crash：Z 极深（旧逻辑的锚点），低点 8.95
+      push(9.3, 9.0, 9.35, 8.96);
+      push(9.6, 9.3, 9.65, 9.26);
+      push(9.2, 9.6, 9.65, 9.15);
+      push(8.4, 9.2, 9.25, 8.35);   // 第二波 crash：Z 较浅但低点 8.35 更低 → 新锚点必须是这天（index 78）
+      push(8.9, 8.4, 8.95, 8.4);    // 企稳 bar（收阳）
+      push(9.5, 8.9, 9.6, 8.85);    // 触发日：收复前高 8.95 且站上 MA5
+      const s = historicalSetup("oversold", out, null, DEFAULTS, "A", "sh600000");
+      return s.stage === 3 && s.metrics.eventIndex === 78;
     });
     return tests;
   }
