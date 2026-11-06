@@ -1,4 +1,4 @@
-/* Quant v14.7 objective signal and intraday execution core. No DOM, storage, network or account rules.
+/* Quant v15.0 objective signal and intraday execution core. No DOM, storage, network or account rules.
    纯内核：参数/通道/排除名单来自 globalThis.QRULES（quant-rules.js），插件规则来自 globalThis.QuantRules。 */
 const QuantCore = (() => {
   "use strict";
@@ -15,10 +15,6 @@ const QuantCore = (() => {
     minRR: 1.5,
     holdingDays: 10,
     intradayQuoteMaxAgeSec: 180,
-    intradayConfirmSamples: 2,
-    intradayMinSampleGapSec: 30,
-    intradayConfirmWindowSec: 3600,
-    intradaySampleMaxAgeSec: 3600,
     intradayMinVolumePace: 0.8,
     minStopAtr: 0.5,
     maxStopAtr: 2.5,
@@ -1096,7 +1092,7 @@ const QuantCore = (() => {
     const simulated = session.state !== "REGULAR";
     if (simulated && !validPositive(o.simPrice)) {
       const title = session.state === "PRE" ? "盘前仅预案｜不提前挂单" : session.state === "MIDDAY" ? "午间休市｜不生成实时指令" : "非盘中｜未触发预案当日作废";
-      return out("NON_SESSION", title, `冻结入场区 ${round(g.zoneLo, 4)}～${round(g.zoneHi, 4)}；无最近收盘模拟数据，七门不计算；连续竞价后重新通过七门确认。`, "neutral", { stop: g.stop, target: g.target });
+      return out("NON_SESSION", title, `冻结入场区 ${round(g.zoneLo, 4)}～${round(g.zoneHi, 4)}；无最近收盘模拟数据，六门不计算；连续竞价后重新通过六门确认。`, "neutral", { stop: g.stop, target: g.target });
     }
     if (simulated) {
       quote = {
@@ -1121,7 +1117,7 @@ const QuantCore = (() => {
           ? `行情日 ${quoteDay || "—"} 早于触发日 ${p.triggerDate}，存在数据错位`
           : `行情日 ${quoteDay || "—"} 与本地交易日 ${z.day} 不一致`, "danger");
     // v14.3：报价新鲜度按市场分设阈值——美股免费行情延迟普遍>180秒，
-    // 共用 A股阈值会使美股盘中七门恒为 STALE、盘中执行名存实亡。
+    // 共用 A股阈值会使美股盘中六门恒为 STALE、盘中执行名存实亡。
     const quoteMaxAgeSec = market === "US"
       ? (cfg.intradayQuoteMaxAgeSecUS ?? cfg.intradayQuoteMaxAgeSec)
       : cfg.intradayQuoteMaxAgeSec;
@@ -1137,7 +1133,7 @@ const QuantCore = (() => {
     }
     const maxAge = 2;
     if (!Number.isFinite(p.age) || p.age > maxAge)
-      return out("EXPIRED", "盘中窗口结束｜不沿用旧价位", `盘中七门只在信号年龄 ≤${maxAge} 个交易日内开放；当前信号年龄 ${p.age ?? "—"}`, "neutral");
+      return out("EXPIRED", "盘中窗口结束｜不沿用旧价位", `盘中六门只在信号年龄 ≤${maxAge} 个交易日内开放；当前信号年龄 ${p.age ?? "—"}`, "neutral");
     if (p.liquidity && p.liquidity.pass === false)
       return out("BLOCKED", "不操作｜日线流动性门槛未通过", p.liquidity.reason || "成交额不足，不能由盘中报价抵消", "warn");
 
@@ -1173,27 +1169,10 @@ const QuantCore = (() => {
     check("tradable", "可成交性", tradablePass, nearLimitUp ? "接近涨停且位于日内高价，无法确认可成交" : "未发现当前报价级成交拦截");
     check("volume", "当日量能节奏", volumePass, Number.isFinite(volumePace) ? `${round(volumePace, 2)}× / 初始门槛 ${round(cfg.intradayMinVolumePace, 2)}×` : "缺少成交额、20日基准或有效交易时长");
 
-    const rawSamples = Array.isArray(o.samples) ? o.samples.slice() : [],
-      samples = rawSamples.filter((x) => x && finite(x.price) && +x.price > 0 && finite(x.qtime) &&
-        tzInfo(new Date(+x.qtime), zone).day === quoteDay &&
-        +x.qtime >= now.getTime() - (cfg.intradaySampleMaxAgeSec || 3600) * 1000 &&
-        +x.qtime <= now.getTime() + 5 * 60e3)
-        .sort((a, b) => +a.qtime - +b.qtime),
-      required = Math.max(2, Math.round(cfg.intradayConfirmSamples)),
-      tail = samples.slice(-required),
-      spaced = tail.length === required && tail[tail.length - 1].qtime - tail[0].qtime >= cfg.intradayMinSampleGapSec * 1000 &&
-        tail[tail.length - 1].qtime - tail[0].qtime <= cfg.intradayConfirmWindowSec * 1000,
-      heldZone = tail.length === required && tail.every((x) => +x.price >= zoneLoEff && +x.price <= zoneHiEff && +x.price > g.stop),
-      notWeakening = tail.length === required && +tail[tail.length - 1].price >= +tail[0].price,
-      testedLow = p.channel !== "oversold" || (validPositive(quote.low) && +quote.low <= zoneLoEff) ||
-        samples.some((x) => (validPositive(x.low) && +x.low <= zoneLoEff) || +x.price < zoneLoEff),
-      confirmPass = spaced && heldZone && notWeakening && testedLow,
-      confirmDetail = `${Math.min(tail.length, required)}/${required} 次连续区内报价｜间隔${spaced ? "✓" : "✗"} ${cfg.intradayMinSampleGapSec}～${cfg.intradayConfirmWindowSec}秒｜区内持有${heldZone ? "✓" : "✗"}｜未走弱${notWeakening ? "✓" : "✗"}${p.channel === "oversold" ? `｜测试下沿后收复${testedLow ? "✓" : "✗"}` : ""}`;
-    check("confirmation", "盘中连续确认", confirmPass, confirmDetail);
-
+    // v15.0：删除"盘中连续确认"门（原需 ≥2 次间隔 ≥30 秒的区内连续报价）——用户不常刷新
+    // 页面且人工复核，确认样本机制随门一并移除；六门 = 结构/区/赔率/止损距离/可成交/量能。
     const common = { netRR: rr, stop: g.stop, target: g.target, zoneLo: g.zoneLo, zoneHi: g.zoneHi,
-      volumePace, confirmation: { count: Math.min(tail.length, required), required, spaced, heldZone, notWeakening, testedLow },
-      suggestedLimit: g.zoneHi, validOnlyToday: true, simulated };
+      volumePace, suggestedLimit: g.zoneHi, validOnlyToday: true, simulated };
     if (!structurePass)
       return out("INVALIDATED", "结构风险｜放弃盘中入场", `现价或日内低点已触及冻结失效锚点 ${round(g.stop, 4)}；今日不复活该预案`, "danger", common);
     if (price < zoneLoEff)
@@ -1208,14 +1187,12 @@ const QuantCore = (() => {
       return out("UNTRADABLE", "可成交性不足｜不下单", nearLimitUp ? "现价接近涨停且处于日内高位，不能把可看见价格当作可成交价格" : "当日成交额无效，无法确认成交状态", "warn", common);
     if (!volumePass)
       return out("WAIT_VOLUME", "量能节奏未确认｜继续等待", Number.isFinite(volumePace) ? `当前量能节奏 ${round(volumePace, 2)}×，低于 ${round(cfg.intradayMinVolumePace, 2)}×；这是 Intraday v1 待验证参数` : "缺少可核验成交额或20日基准，禁止用价格上涨替代量能确认", "warn", common);
-    if (!confirmPass)
-      return out("CONFIRMING", "确认中｜等待连续有效报价", confirmDetail + "；手动重复刷新且报价时间未推进不算新样本", "neutral", common);
     if (simulated)
-      return out("SIMULATED", "收盘模拟七门通过｜非盘中不下单", `按最近完成日K收盘 ${round(price, 4)} 模拟：净赔率 ${round(rr, 2)}∶1，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}。仅反映收盘时点的理论状态；实际执行须待连续竞价重新通过七门确认。`, "ok", { ...common, actionable: false });
-    return out("ACTIONABLE", "七门通过｜人工限价评估", `现价 ${round(price, 4)}；限价不高于 ${round(g.zoneHi, 4)}，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}，净赔率 ${round(rr, 2)}∶1。仅当日有效；仓位=风险预算÷止损幅度，环境／事件与账户红线另核`, "ok", { ...common, actionable: true });
+      return out("SIMULATED", "收盘模拟六门通过｜非盘中不下单", `按最近完成日K收盘 ${round(price, 4)} 模拟：净赔率 ${round(rr, 2)}∶1，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}。仅反映收盘时点的理论状态；实际执行须待连续竞价重新通过六门确认。`, "ok", { ...common, actionable: false });
+    return out("ACTIONABLE", "六门通过｜人工限价评估", `现价 ${round(price, 4)}；限价不高于 ${round(g.zoneHi, 4)}，止损 ${round(g.stop, 4)}，目标 ${round(g.target, 4)}，净赔率 ${round(rr, 2)}∶1。仅当日有效；仓位=风险预算÷止损幅度，环境／事件与账户红线另核`, "ok", { ...common, actionable: true });
   }
   /* v14.0 盘中触发型超跌反弹：把当前报价合成当日虚拟K线，对阶段①/②的超跌结构实时探测；
-     触发即冻结几何（当日有效），执行前仍走同一套七门；收盘后由 journal 层验票。 */
+     触发即冻结几何（当日有效），执行前仍走同一套六门；收盘后由 journal 层验票。 */
   function intradayOversoldPlan(bars, quote, cfg, market, now = new Date()) {
     const c = { ...DEFAULTS, ...(cfg || {}) };
     if (!Array.isArray(bars) || bars.length < c.minBars) return null;
@@ -2946,25 +2923,16 @@ const QuantCore = (() => {
         triggerGeometry: { valid: true, zoneLo: 9, zoneHi: 11, stop: 8, target: 16, atrValue: 1, entryPrice: 10 } },
       quote: { price: 10.1, qtime: Date.parse("2026-10-27T02:00:00Z"), amount: 4e6, prevClose: 9.8, high: 10.2, low: 9.9 },
       averageAmount20: 24e6,
-      samples: [
-        { price: 10, low: 9.8, qtime: Date.parse("2026-10-27T01:58:30Z") },
-        { price: 10.1, low: 9.9, qtime: Date.parse("2026-10-27T02:00:00Z") },
-      ],
       config: DEFAULTS,
     });
-    test("盘中七门通过才形成人工限价提示", () => {
+    test("盘中六门通过才形成人工限价提示", () => {
       const a = intradayAdvice(intraBase());
-      return a.actionable && a.state === "ACTIONABLE" && a.checks.length === 7 && a.checks.every((x) => x.pass) && a.validOnlyToday;
+      return a.actionable && a.state === "ACTIONABLE" && a.checks.length === 6 && a.checks.every((x) => x.pass) && a.validOnlyToday;
     });
-    test("盘中单次报价只能进入确认中", () => {
-      const o = intraBase(); o.samples = o.samples.slice(-1);
-      const a = intradayAdvice(o);
-      return !a.actionable && a.state === "CONFIRMING" && a.confirmation.count === 1;
-    });
-    test("重复报价时间不冒充第二次确认", () => {
-      const o = intraBase(); o.samples[0].qtime = o.samples[1].qtime;
-      const a = intradayAdvice(o);
-      return !a.actionable && a.state === "CONFIRMING" && !a.confirmation.spaced;
+    // v15.0 回归：删除确认门后，单次区内有效报价即达可执行状态，不再要求连续确认样本。
+    test("单次区内有效报价即可通过六门（无连续确认要求）", () => {
+      const a = intradayAdvice(intraBase());
+      return a.actionable && a.state === "ACTIONABLE" && a.checks.length === 6;
     });
     test("盘中高于冻结入场区不追价", () => {
       const o = intraBase(); o.quote.price = 12;
@@ -3021,7 +2989,7 @@ const QuantCore = (() => {
       const a = intradayAdvice(o);
       return !a.actionable && a.state === "NO_PLAN";
     });
-    test("信号当日盘后即开放七门试算，不再跨日排队", () => {
+    test("信号当日盘后即开放六门试算，不再跨日排队", () => {
       const base = intraBase(),
         postSame = {
           ...base,
@@ -3191,13 +3159,6 @@ const QuantCore = (() => {
         closed = intradayOversoldPlan(makeSynthetic(140), { price: 20, open: 20, high: 20, low: 20, qtime: now.getTime() }, DEFAULTS, "US", new Date("2026-10-25T14:00:00Z"));
       return flat === null && closed === null;
     });
-    test("确认样本超过样本有效期不计入确认", () => {
-      const o = intraBase();
-      o.config = { ...DEFAULTS, intradaySampleMaxAgeSec: 60 };
-      o.samples = o.samples.map((x) => ({ ...x, qtime: x.qtime - 90 * 1000 }));
-      const a = intradayAdvice(o);
-      return !a.actionable && a.state === "CONFIRMING" && a.confirmation.count < 2;
-    });
     // v14.3 回归：涨停可成交检查严格用行情源昨收；缺失时跳过，不用可能陈旧的冻结 triggerPrice 兜底。
     test("涨停判定缺少昨收时跳过可成交检查（不用冻结价兜底）", () => {
       const o = intraBase();
@@ -3212,10 +3173,6 @@ const QuantCore = (() => {
         o = intraBase();
       o.market = "US"; o.code = "usTEST"; o.now = now;
       o.quote = { price: 10.1, qtime: now.getTime() - 300e3, amount: 4e6, prevClose: 9.8, high: 10.2, low: 9.9 };
-      o.samples = [
-        { price: 10, low: 9.8, qtime: now.getTime() - 60e3 },
-        { price: 10.1, low: 9.9, qtime: now.getTime() },
-      ];
       const a = intradayAdvice(o);
       return a.actionable && a.state === "ACTIONABLE";
     });

@@ -1,4 +1,4 @@
-/* Quant v14.8 · 规则与参数中心（quant-rules.js）
+/* Quant v15.0 · 规则与参数中心（quant-rules.js）
    改规则只动这里（参数），或新建 rule-*.js 插件（否决门/评分修正），
    再到 quant-main.js 的 RULE_MANIFEST 加一行引用即可，内核不动。
 
@@ -61,12 +61,18 @@
       1~2 天。Z 值仍由 metrics.eventZ 供 Q 评分。连锁：止损锚随实际最低点下移（更宽），
       仓位自动缩小。STRATEGY_VERSION 升 OPENING_DAILY_V9、盘中模型升 INTRADAY_V6；
       旧档案按指纹自动隔离不删除。
+   ⑭ v15.0（删除盘中连续确认门，行为级，用户裁决 2026-11-06）：盘中七门减为六门——
+      删除"盘中连续确认"门（原要求 ≥2 次间隔 ≥30 秒的区内连续报价）。用户不常刷新页面
+      且人工复核，确认样本机制（盘中采样/本地存储/确认证据列）随门一并清理；其余五门
+      与执行口径不变。STRATEGY_VERSION 升 OPENING_DAILY_V10、盘中模型升 INTRADAY_V7；
+      旧档案按执行模型与参数指纹自动分列。行为后果：区内单次有效报价即达可执行状态，
+      触发密度上升，人工复核责任同步加重；V6（有确认门）与 V7（无）档案天然构成 A/B。
    ───────────────────────────────────────────────── */
 "use strict";
 globalThis.QRULES = {
-  VERSION: "v14.9",
-  STRATEGY_VERSION: "OPENING_DAILY_V9",
-  INTRADAY_MODEL: "INTRADAY_V6",
+  VERSION: "v15.0",
+  STRATEGY_VERSION: "OPENING_DAILY_V10",
+  INTRADAY_MODEL: "INTRADAY_V7",
   DEFAULTS: {
     minBars: 80,
     minAmountA: 5e7,
@@ -79,10 +85,6 @@ globalThis.QRULES = {
     // v14.3：美股盘中报价独立新鲜度阈值（秒）。免费美股行情延迟普遍>180秒，
     // 共用 A股阈值会使美股盘中七门恒为 STALE、盘中执行名存实亡。
     intradayQuoteMaxAgeSecUS: 1200,
-    intradayConfirmSamples: 2,
-    intradayMinSampleGapSec: 30,
-    intradayConfirmWindowSec: 3600,
-    intradaySampleMaxAgeSec: 3600,
     // v14.3：0.8→0.65。均匀成交下分时曲线 dayFrac+0.13·sin(π·dayFrac) 全天仅 0.71~0.73，
     // 旧门槛几乎只在尾盘放行；新门槛仍高于均匀基准，属"偏积极"而非放任。
     intradayMinVolumePace: 0.65,

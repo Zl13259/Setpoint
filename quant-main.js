@@ -1,4 +1,4 @@
-/* Quant v14.7 · quant-main.js
+/* Quant v15.0 · quant-main.js
    启动与事件层：共享状态、全局工具、模块加载校验、规则插件加载（RULE_MANIFEST）、事件绑定、boot。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → 本文件（最后）。 */
 "use strict";
@@ -78,7 +78,6 @@ const state = {
     intradaySeq: 0,
     lastIntradayAt: 0,
     intradayMessage: "尚未执行独立报价刷新",
-    intradaySamples: {},
     intradayRecords: [],
     marketHealth: { A: null, US: null },
     loadStartedAt: 0,
@@ -158,8 +157,6 @@ function loadLocal() {
     if (cfg) state.config = { ...state.config, ...cfg };
     const pins = safeGet("quant_v10_pins");
     if (Array.isArray(pins)) state.pins = new Set(pins.filter((x) => typeof x === "string"));
-    const intraSamples = safeGet("quant_v11_intraday_samples_v1");
-    if (intraSamples && typeof intraSamples === "object" && !Array.isArray(intraSamples)) state.intradaySamples = intraSamples;
     const intraRecords = safeGet("quant_v11_intraday_v1");
     if (intraRecords && Array.isArray(intraRecords.entries)) state.intradayRecords = intraRecords.entries;
     const prefs = safeGet("quant_v10_monitor");
@@ -265,10 +262,9 @@ async function refreshIntradayQuotes(manual = true) {
       state.lastIntradayAt = Date.now();
       state.intradayMessage = `${updated}/${codes.length} 只报价已更新；日线Q、模型状态与冻结几何未重算`;
       log(`盘中报价层完成：${updated}/${codes.length} 只；未发起全池日K刷新`);
-      captureAllIntradaySamples();
       captureIntradayTriggers();
       renderSignals();
-      if (manual) toast("盘中报价已更新；七门状态与触发档案已复核");
+      if (manual) toast("盘中报价已更新；六门状态与触发档案已复核");
     } catch (e) {
       state.intradayMessage = "报价刷新失败：" + e.message + "；不沿用旧动作";
       log(state.intradayMessage, "error");
@@ -429,7 +425,7 @@ async function refreshSignals(force = true) {
       state.intradayMessage = "随全量信号刷新更新报价；日线与冻结几何已复核";
       // v14.6：台账层调用逐个容错——单层故障不得抹掉已完成的信号加载成果。
       try { updateForwardJournal(); } catch (e) { log("开盘台账更新异常：" + e.message, "error"); }
-      try { captureAllIntradaySamples(); updateIntradayJournal(); } catch (e) { log("盘中台账更新异常：" + e.message, "error"); }
+      try { updateIntradayJournal(); } catch (e) { log("盘中台账更新异常：" + e.message, "error"); }
       try { captureIntradayTriggers(); } catch (e) { log("盘中触发捕获异常：" + e.message, "error"); }
       log(`研究池刷新完成，有效 ${valid}/${items.length}`);
     } catch (e) {
@@ -919,10 +915,10 @@ function bindEvents() {
       downloadJSON({ type: "intraday-forward-journal", exportedAt: new Date().toISOString(), entries: intradayEntries() }, `quant_${C.VERSION}_盘中触发与前向.json`);
     });
     $("clearIntradayBtn").addEventListener("click", () => {
-      if (!intradayEntries().length && !Object.keys(state.intradaySamples).length) return toast("当前没有盘中记录或样本");
-      if (!confirm("清空当前浏览器中的盘中触发档案与确认样本？此操作不可撤销；开盘模型记录和研究池不受影响。")) return;
-      saveIntraday([]); state.intradaySamples = {}; saveIntradaySamples();
-      renderIntradayJournal(); renderSignals(); toast("盘中触发档案与确认样本已清空");
+      if (!intradayEntries().length) return toast("当前没有盘中记录");
+      if (!confirm("清空当前浏览器中的盘中触发档案？此操作不可撤销；开盘模型记录和研究池不受影响。")) return;
+      saveIntraday([]);
+      renderIntradayJournal(); renderSignals(); toast("盘中触发档案已清空");
     });
     $("exportForwardBtn").addEventListener("click", () => {
       downloadJSON({ type: "objective-forward-journal", strategyVersion: C.STRATEGY_VERSION, exportedAt: new Date().toISOString(), entries: forwardEntries() }, `quant_${C.VERSION}_开盘模型前向.json`);

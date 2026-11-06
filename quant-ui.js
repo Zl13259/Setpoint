@@ -1,4 +1,4 @@
-/* Quant v14.7 · quant-ui.js
+/* Quant v15.0 · quant-ui.js
    渲染层：信号台、详情、回放汇总、诊断等全部 DOM 渲染。只读 state，不改判定逻辑。
    加载顺序：quant-rules → quant-core → quant-data → quant-journal → quant-ui → quant-main。 */
 "use strict";
@@ -145,9 +145,9 @@ function actionGuidance(r) {
     }
     switch (r.status) {
       case "NEXT_SESSION_PLAN":
-        return { title: "仅作预案｜不提前挂单", detail: `冻结区 ${zone}；盘前只看情景，盘中七门通过后才人工限价评估，未触发当日作废。` };
+        return { title: "仅作预案｜不提前挂单", detail: `冻结区 ${zone}；盘前只看情景，盘中六门通过后才人工限价评估，未触发当日作废。` };
       case "WAIT_ENTRY":
-        return { title: "开盘模型等待｜盘中独立确认", detail: `原开盘模型余 ${p.remainingAttempts ?? "—"} 次窗口；盘中另按 ${zone} 与七门确认，不相互冒充成交。` };
+        return { title: "开盘模型等待｜盘中独立确认", detail: `原开盘模型余 ${p.remainingAttempts ?? "—"} 次窗口；盘中另按 ${zone} 与六门确认，不相互冒充成交。` };
       case "MODEL_ENTERED":
         return { title: "开盘模型已入场｜不是新买点", detail: `${p.entryDate || "入场日待核"} 已触发；模型止损 ${fmt(g.stop)}、目标 ${fmt(g.target)}，不重复追加。` };
       case "RESEARCH_ONLY":
@@ -156,13 +156,13 @@ function actionGuidance(r) {
         const hard = (p.reasons || []).some((x) => !String(x).includes("净赔率"));
         return hard
           ? { title: "放弃｜硬门槛未通过", detail: `${statusReason(r) || r.statusText}；不能由盘中价格或高分抵消。` }
-          : { title: "当前净赔率未过｜盘中重核", detail: `${statusReason(r) || r.statusText}；若价格回到冻结区，仍须重新通过全部七门。` };
+          : { title: "当前净赔率未过｜盘中重核", detail: `${statusReason(r) || r.statusText}；若价格回到冻结区，仍须重新通过全部六门。` };
       }
       case "ARCHIVED":
         return { title: "已归档｜不再执行", detail: `${p.archiveReason || "目标或止损已越过"}；未入场旧信号退出当前队列，历史研究保留。` };
       case "EXPIRED":
         return p.expiredReason === "窗口耗尽"
-          ? { title: "开盘模型结束｜盘中另行核验", detail: "开盘窗口耗尽可能只代表开盘价不合格；独立盘中模型仍须重新检查结构、年龄与七门。" }
+          ? { title: "开盘模型结束｜盘中另行核验", detail: "开盘窗口耗尽可能只代表开盘价不合格；独立盘中模型仍须重新检查结构、年龄与六门。" }
           : { title: "不再操作｜信号结构失效", detail: r.statusText || "不沿用旧入场区，不以盘中反弹复活信号。" };
       case "MANUAL_REVIEW":
         return { title: "先人工复核｜暂不操作", detail: "超跌与突破通道判断冲突，不能静默选择高分通道。" };
@@ -269,7 +269,7 @@ function conclusionHTML(r) {
         fresh = freshLineText(p);
       if (r.status === "NEXT_SESSION_PLAN") {
         title = "只做预案，不提前挂单";
-        detail = `${rr}；${entry}。只在回区且七门通过时评估；${risk}；${fresh}。`;
+        detail = `${rr}；${entry}。只在回区且六门通过时评估；${risk}；${fresh}。`;
       } else if (r.status === "WAIT_ENTRY") {
         title = "开盘等待｜盘中独立确认";
         detail = `${rr}；${entry}。开盘余 ${p.remainingAttempts ?? "—"} 次；${risk}；${fresh}。`;
@@ -300,7 +300,7 @@ function currentIntradayKey(r, quoteDay) {
   }
 
 /* v14.0：盘中触发型超跌反弹——对阶段①/②的超跌结构用虚拟K线实时探测；触发即冻结几何、
-   走同一套七门，可执行但仅当日有效；收盘后由 journal 验票（确认转正式前向，否决则作废）。
+   走同一套六门，可执行但仅当日有效；收盘后由 journal 验票（确认转正式前向，否决则作废）。
    结果按 报价时间+价格 缓存，避免每次渲染重复探测。 */
 function resolveIntradayPrimary(r, quote) {
     let primary = r.primary, previewBased = false, intradayLive = false;
@@ -328,7 +328,7 @@ function resolveIntradayPrimary(r, quote) {
       }
     }
     if (!intradayLive && !blocked && primary && primary.previewGeometry && Number.isFinite(r.price)) {
-      // 未触发（阶段①／②）标的：用 v12.6 的预估几何合成临时预案，走同一套七门口径试算。
+      // 未触发（阶段①／②）标的：用 v12.6 的预估几何合成临时预案，走同一套六门口径试算。
       // 结果只允许展示，永远不可执行、不建档、不进前向样本。
       primary = {
         ...primary,
@@ -363,7 +363,7 @@ function currentIntraday(r) {
       a = C.intradayAdvice({
         code: r.code, name: r.name, market: r.market, status: r.status, statusText: r.statusText,
         primary, quote, averageAmount20: r.averageAmount20,
-        samples: state.intradaySamples[key] || [], now: new Date(), config: state.config,
+        now: new Date(), config: state.config,
         simPrice: lastBar ? lastBar.close : null,
         simAmount: lastBar && Number.isFinite(lastBar.amount) ? lastBar.amount : null,
         simHigh: lastBar ? lastBar.high : null,
@@ -377,7 +377,7 @@ function currentIntraday(r) {
       a.actionable = false;
       if (a.state === "ACTIONABLE") a.state = "SIMULATED";
       a.title = "预估·未触发｜" + a.title;
-      a.detail += "；以上为对未触发结构按预估几何进行的七门试算，不构成买点、不建档、不进前向样本。";
+      a.detail += "；以上为对未触发结构按预估几何进行的六门试算，不构成买点、不建档、不进前向样本。";
     }
     if (intradayLive) {
       a.intradayLive = true;
@@ -387,7 +387,7 @@ function currentIntraday(r) {
     const record = state.intradayRecords.find((e) => e.planKey === a.planKey && e.version === C.VERSION && e.geometryHash === (r.primary && r.primary.triggerGeometry ? stableHash(r.primary.triggerGeometry) : null));
     a.triggerLogged = !!record;
     a.recordId = record && record.id;
-    if (a.actionable && record) a.title = "七门通过｜已留痕·人工限价评估";
+    if (a.actionable && record) a.title = "六门通过｜已留痕·人工限价评估";
     return a;
   }
 
@@ -396,7 +396,7 @@ function intradayHTML(r) {
     const a = currentIntraday(r),
       gp = a.gateProgress,
       progressLine = gp && gp.total
-        ? `<span class="small muted" style="display:block;margin-top:2px">七门进度 ${gp.passed}/${gp.total}｜${gp.failed.length ? "距触发还差：" + gp.failed.map(esc).join("、") : "全部通过"}</span>`
+        ? `<span class="small muted" style="display:block;margin-top:2px">六门进度 ${gp.passed}/${gp.total}｜${gp.failed.length ? "距触发还差：" + gp.failed.map(esc).join("、") : "全部通过"}</span>`
         : "",
       checks = a.checks && a.checks.length
         ? `<span class="intraday-checks">${a.checks.map((x) => `<span class="${x.pass ? "ok" : "warn"}">${x.pass ? "通过" : "未过"}·${esc(x.label)}：${esc(x.detail)}</span>`).join("")}</span>`
@@ -408,12 +408,12 @@ function intradayHTML(r) {
 function intradayChecksHTML(r) {
     const a = currentIntraday(r),
       simNote = a.simulated ? '<p class="small muted" style="margin:0 0 6px">非盘中：以下按最近完成日K收盘数据模拟计算，仅反映收盘时点理论状态，不构成可执行指令。</p>' : "",
-      previewNote = a.previewBased ? '<p class="small muted" style="margin:0 0 6px">未触发结构：以下按预估几何（v12.6 空间预估）走同一套七门口径试算，只用于评估条件差距，不构成买点、不建档、不进前向样本。</p>' : "";
+      previewNote = a.previewBased ? '<p class="small muted" style="margin:0 0 6px">未触发结构：以下按预估几何（v12.6 空间预估）走同一套六门口径试算，只用于评估条件差距，不构成买点、不建档、不进前向样本。</p>' : "";
     if (a.checks && a.checks.length)
       return simNote + previewNote + `<div class="intraday-checks">${a.checks.map((x) => `<span class="${x.pass ? "ok" : "warn"}">${x.pass ? "通过" : "未过"}·${esc(x.label)}：${esc(x.detail)}</span>`).join("")}</div>`;
     if (r.status === "MODEL_ENTERED" && r.primary && (r.primary.triggerGeometry || r.primary.modelEntryGeometry))
       return intradayMonitorHTML(r);
-    return `<p class="small muted">七门不适用于当前状态：${esc(a.title)}。${esc(a.detail)}</p>`;
+    return `<p class="small muted">六门不适用于当前状态：${esc(a.title)}。${esc(a.detail)}</p>`;
   }
 
 function intradayMonitorHTML(r) {
@@ -432,7 +432,7 @@ function intradayMonitorHTML(r) {
             : `未成交（${rec.result.reason}）`
           : (rec.pendingStage || "待结算")
         : "前向记录未匹配（可能为 v12.0 前旧档案）";
-    return `<p class="small muted" style="margin:0 0 6px">开盘模型已入场：七门是未入场计划的盘中执行路径，已入场标的不重复走七门，只监控冻结止损／目标与结算进度；不代表你的实际持仓。</p><div class="geometry-grid"><div><span>模型入场</span><b class="num">${fmt(entry)}（${esc(p.entryDate || "日期待核")}）</b></div><div><span>现价浮动</span><b class="num ${rNow > 0 ? "up" : rNow < 0 ? "down" : ""}">${Number.isFinite(rNow) ? fmt(rNow, 2) + "R" : "—"}</b></div><div><span>距冻结止损</span><b class="num">${toStopPct === null ? "—" : fmt(toStopPct, 1) + "%"}</b></div><div><span>距冻结目标</span><b class="num">${toTargetPct === null ? "—" : "+" + fmt(toTargetPct, 1) + "%"}</b></div><div><span>模型结算</span><b>${esc(settle)}</b></div></div>`;
+    return `<p class="small muted" style="margin:0 0 6px">开盘模型已入场：六门是未入场计划的盘中执行路径，已入场标的不重复走六门，只监控冻结止损／目标与结算进度；不代表你的实际持仓。</p><div class="geometry-grid"><div><span>模型入场</span><b class="num">${fmt(entry)}（${esc(p.entryDate || "日期待核")}）</b></div><div><span>现价浮动</span><b class="num ${rNow > 0 ? "up" : rNow < 0 ? "down" : ""}">${Number.isFinite(rNow) ? fmt(rNow, 2) + "R" : "—"}</b></div><div><span>距冻结止损</span><b class="num">${toStopPct === null ? "—" : fmt(toStopPct, 1) + "%"}</b></div><div><span>距冻结目标</span><b class="num">${toTargetPct === null ? "—" : "+" + fmt(toTargetPct, 1) + "%"}</b></div><div><span>模型结算</span><b>${esc(settle)}</b></div></div>`;
   }
 
 function renderIntradayPanel() {
@@ -440,7 +440,7 @@ function renderIntradayPanel() {
       regular = rows.filter((r) => C.marketSession(r.market, new Date()).state === "REGULAR"),
       advice = regular.map((r) => currentIntraday(r)),
       actionable = advice.filter((a) => a.actionable).length,
-      confirming = advice.filter((a) => ["CONFIRMING", "WAIT_VOLUME", "WAIT_ZONE", "WAIT_RR"].includes(a.state)).length,
+      confirming = advice.filter((a) => ["WAIT_VOLUME", "WAIT_ZONE", "WAIT_RR"].includes(a.state)).length,
       risk = advice.filter((a) => a.tone === "danger").length;
     $("countIntraday").textContent = actionable;
     $("intradayStatus").textContent = state.loading || state.scanning
@@ -448,11 +448,11 @@ function renderIntradayPanel() {
       : !rows.length
         ? "暂无监控标的"
         : regular.length
-          ? `盘中监控 ${regular.length} 只｜七门通过 ${actionable}｜等待／确认 ${confirming}｜风险拦截 ${risk}`
+          ? `盘中监控 ${regular.length} 只｜六门通过 ${actionable}｜等待／确认 ${confirming}｜风险拦截 ${risk}`
           : "非盘中｜只保留预案，不生成隔夜挂单";
     $("intradaySummary").textContent = regular.length
-      ? "数据→结构→盘中确认→交易几何→可成交七门独立核验；首次通过自动留痕，仅当日有效，不改写日线Q。"
-      : "盘前只准备、盘中才执行；未触发预案收盘作废，报价与确认样本仅保存在本机。";
+      ? "数据→结构→交易几何→可成交六门独立核验；首次通过自动留痕，仅当日有效，不改写日线Q。"
+      : "盘前只准备、盘中才执行；未触发预案收盘作废，报价仅保存在本机。";
     const stamp = state.lastIntradayAt
       ? new Date(state.lastIntradayAt).toLocaleTimeString("zh-CN", { hour12: false })
       : "—";
@@ -542,7 +542,7 @@ function detailHTML(r) {
           zoneRR = Number.isFinite(obs.previewZoneBestRR) ? `整区最优预估净赔率 ${fmt(obs.previewZoneBestRR, 2)}∶1（门槛 ${fmt(state.config.minRR, 1)}∶1）` : "整区最优预估净赔率 —";
         previewBlock = `<div><h3>交易空间与价位（预估）</h3><div class="geometry-grid"><div><span>预估入场区</span><b class="num">${fmt(pg.zoneLo)}～${fmt(pg.zoneHi)}</b></div><div><span>现价净赔率（预估）</span><b class="num rr-now">${rrText(pg)}</b></div><div><span>预估止损</span><b class="num">${fmt(pg.stop)}（${stopDistanceText(pg, r.price)}）</b><small>现价 ${fmt(pg.stopAtr, 2)} ATR｜区下沿 ${fmt(atrAt(pg, pg.zoneLo), 2)} ATR</small></div><div><span>预估第一目标</span><b class="num">${fmt(pg.target)}（${targetDistanceText(pg, r.price)}）</b><small>现价 ${fmt(pg.targetAtr, 2)} ATR</small></div>${pg.higherPressure ? `<div><span>最近高周期压力</span><b class="warn num">${esc(pg.higherPressure.period)} ${fmt(pg.higherPressure.price)}（${signedPct(pressurePct)}）</b><small>原目标 ${fmt(pg.rawTarget)}（${signedPct(rawTargetPct)}），已收缩</small></div>` : `<div><span>高周期压力</span><b>未提前收缩目标</b></div>`}<div><span>结构锚点</span><b>${esc(pg.anchorLabel)}</b></div></div>${narrow ? `<p class="small warn space-warning">空间偏窄：预估目标距现价不足 1 倍 ATR，可能处于日常波动范围内。</p>` : ""}${stopAtrWarning(pg)}<p class="small muted" style="margin-top:8px">${esc(zoneRR)}。以上为对未触发结构按现价的预估：不构成买点、不冻结几何、不进前向样本。费用 ${state.config.feeBps} bps（往返）＋滑点 ${state.config.slippageBps} bps（单边）。止损不保证成交。</p>${obs.previewQ ? dimHTML("预估 Q 子项（未触发）", obs.previewQ.dims) : ""}</div>`;
       }
-      return `<div class="detail"><div class="detail-checks"><h3>盘中七门核验</h3>${intradayChecksHTML(r)}</div>${previewBlock}<div><h3>观察原因</h3><p>${esc(r.statusText)}</p><p class="small muted">排序分 ${obs && obs.previewQ ? scoreBadgeHTML({ Q: obs.previewQ, E: obs.previewE, S: obs.previewS }, true) : scoreBadgeHTML(null)}</p></div><div><h3>数据时点</h3><p>${dataLine}</p></div><div><h3>质量诊断</h3><p>${esc([...((r.quality && r.quality.errors) || []), ...warnings].join("；") || "未形成三通道候选")}</p></div></div>`;
+      return `<div class="detail"><div class="detail-checks"><h3>盘中六门核验</h3>${intradayChecksHTML(r)}</div>${previewBlock}<div><h3>观察原因</h3><p>${esc(r.statusText)}</p><p class="small muted">排序分 ${obs && obs.previewQ ? scoreBadgeHTML({ Q: obs.previewQ, E: obs.previewE, S: obs.previewS }, true) : scoreBadgeHTML(null)}</p></div><div><h3>数据时点</h3><p>${dataLine}</p></div><div><h3>质量诊断</h3><p>${esc([...((r.quality && r.quality.errors) || []), ...warnings].join("；") || "未形成三通道候选")}</p></div></div>`;
     }
     const g = p.geometry, alt = r.alternates || [], a = actionGuidance(r),
       pressurePct = g.higherPressure && r.price > 0 ? (g.higherPressure.price / r.price - 1) * 100 : null,
@@ -554,7 +554,7 @@ function detailHTML(r) {
       attemptLine = (p.attempts || []).map((x) => `${x.date} ${x.status === "ENTER" ? "条件满足" : "未入场"}：${x.reason}`).join("；") || "尚未进行开盘检查",
       windowLine = `开盘窗口：已检查 ${p.usedAttempts ?? 0} / ${p.maxAttempts ?? "—"} 次；剩余 ${p.remainingAttempts ?? "—"} 次；${attemptLine}`,
       narrow = Number.isFinite(g.targetAtr) && g.targetAtr < 1;
-    return `<div class="detail"><div class="detail-checks"><h3>盘中七门核验</h3>${intradayChecksHTML(r)}</div><div><h3>交易翻译</h3><p><b>${esc(a.title)}</b> ${esc(a.detail)}</p><div class="exec-lines"><span class="exec-line">${esc(rrLineText(g, p.zoneBestRR, p.channel))}</span><span class="exec-line">${esc(entryLineText(g, r.price))}</span><span class="exec-line">${esc(`止损 ${fmt(g.stop)}（${stopDistanceText(g, r.price)}）；目标 ${fmt(g.target)}（${targetDistanceText(g, r.price)}）；结构锚点 ${g.anchorLabel}`)}</span><span class="exec-line">${esc(freshLineText(p))}｜${esc(p.name)}｜排序分 ${esc(`Q ${fmt(p.Q.value, 1)} · E ${fmt(p.E.value, 1)} · S ${fmt(p.S, 1)}`)}</span></div><h4>信号依据</h4><ul class="reason-list">${(p.evidence || []).map((x) => `<li>${esc(x)}</li>`).join("")}<li>首次有效触发：${esc(p.triggerDate)}；信号年龄 ${p.age} 个完成交易日</li><li>${esc(windowLine)}</li>${(p.reasons || []).map((x) => `<li class="warn">${esc(x)}</li>`).join("")}</ul><h4>其他合格通道</h4><p>${alt.length ? alt.map((x) => esc(x.name) + " / " + esc(x.statusText)).join("；") : "无"}</p></div><div><h3>交易空间与价位</h3><div class="geometry-grid"><div><span>入场区</span><b class="num">${fmt(g.zoneLo)}～${fmt(g.zoneHi)}</b></div><div><span>现价净赔率</span><b class="num rr-now">${rrText(g)}</b><small>整区最优 ${Number.isFinite(p.zoneBestRR) ? fmt(p.zoneBestRR, 2) + "∶1" : "—"}</small></div><div><span>止损</span><b class="num">${fmt(g.stop)}（${stopDistanceText(g, r.price)}）</b><small>现价 ${fmt(g.stopAtr, 2)} ATR｜区下沿 ${fmt(atrAt(g, g.zoneLo), 2)} ATR</small></div><div><span>第一目标</span><b class="num">${fmt(g.target)}（${targetDistanceText(g, r.price)}）</b><small>现价 ${fmt(g.targetAtr, 2)} ATR</small></div>${pressure}<div><span>结构锚点</span><b>${esc(g.anchorLabel)}</b></div></div>${narrow ? `<p class="small warn space-warning">空间偏窄：第一目标距现价不足 1 倍 ATR，可能处于日常波动范围内；这只是提示，不自动改写候选或拉远目标。</p>` : ""}${stopAtrWarning(g)}<p class="small muted" style="margin-top:8px">百分比按现价计算；ATR 距离用于判断空间是否被日常波动主导，不是新硬门槛。上方压力：${pressureList}。费用 ${state.config.feeBps} bps（往返）＋滑点 ${state.config.slippageBps} bps（单边）。止损不保证成交。</p></div><div><h3>数据时点</h3><p>${dataLine}；${r.session.state === "REGULAR" ? "常规交易时段" : "非盘中，盘中未完成K线未计入Q"}</p>${warnings.length ? `<p class="small warn">${esc(warnings.join("；"))}</p>` : ""}<h4>质量诊断</h4><p>${esc([...((r.quality && r.quality.errors) || []), ...warnings].join("；") || "通过")}</p></div></div>`;
+    return `<div class="detail"><div class="detail-checks"><h3>盘中六门核验</h3>${intradayChecksHTML(r)}</div><div><h3>交易翻译</h3><p><b>${esc(a.title)}</b> ${esc(a.detail)}</p><div class="exec-lines"><span class="exec-line">${esc(rrLineText(g, p.zoneBestRR, p.channel))}</span><span class="exec-line">${esc(entryLineText(g, r.price))}</span><span class="exec-line">${esc(`止损 ${fmt(g.stop)}（${stopDistanceText(g, r.price)}）；目标 ${fmt(g.target)}（${targetDistanceText(g, r.price)}）；结构锚点 ${g.anchorLabel}`)}</span><span class="exec-line">${esc(freshLineText(p))}｜${esc(p.name)}｜排序分 ${esc(`Q ${fmt(p.Q.value, 1)} · E ${fmt(p.E.value, 1)} · S ${fmt(p.S, 1)}`)}</span></div><h4>信号依据</h4><ul class="reason-list">${(p.evidence || []).map((x) => `<li>${esc(x)}</li>`).join("")}<li>首次有效触发：${esc(p.triggerDate)}；信号年龄 ${p.age} 个完成交易日</li><li>${esc(windowLine)}</li>${(p.reasons || []).map((x) => `<li class="warn">${esc(x)}</li>`).join("")}</ul><h4>其他合格通道</h4><p>${alt.length ? alt.map((x) => esc(x.name) + " / " + esc(x.statusText)).join("；") : "无"}</p></div><div><h3>交易空间与价位</h3><div class="geometry-grid"><div><span>入场区</span><b class="num">${fmt(g.zoneLo)}～${fmt(g.zoneHi)}</b></div><div><span>现价净赔率</span><b class="num rr-now">${rrText(g)}</b><small>整区最优 ${Number.isFinite(p.zoneBestRR) ? fmt(p.zoneBestRR, 2) + "∶1" : "—"}</small></div><div><span>止损</span><b class="num">${fmt(g.stop)}（${stopDistanceText(g, r.price)}）</b><small>现价 ${fmt(g.stopAtr, 2)} ATR｜区下沿 ${fmt(atrAt(g, g.zoneLo), 2)} ATR</small></div><div><span>第一目标</span><b class="num">${fmt(g.target)}（${targetDistanceText(g, r.price)}）</b><small>现价 ${fmt(g.targetAtr, 2)} ATR</small></div>${pressure}<div><span>结构锚点</span><b>${esc(g.anchorLabel)}</b></div></div>${narrow ? `<p class="small warn space-warning">空间偏窄：第一目标距现价不足 1 倍 ATR，可能处于日常波动范围内；这只是提示，不自动改写候选或拉远目标。</p>` : ""}${stopAtrWarning(g)}<p class="small muted" style="margin-top:8px">百分比按现价计算；ATR 距离用于判断空间是否被日常波动主导，不是新硬门槛。上方压力：${pressureList}。费用 ${state.config.feeBps} bps（往返）＋滑点 ${state.config.slippageBps} bps（单边）。止损不保证成交。</p></div><div><h3>数据时点</h3><p>${dataLine}；${r.session.state === "REGULAR" ? "常规交易时段" : "非盘中，盘中未完成K线未计入Q"}</p>${warnings.length ? `<p class="small warn">${esc(warnings.join("；"))}</p>` : ""}<h4>质量诊断</h4><p>${esc([...((r.quality && r.quality.errors) || []), ...warnings].join("；") || "通过")}</p></div></div>`;
   }
 
 function previewVolume(v, market) {
@@ -728,7 +728,7 @@ function renderDiagnostics() {
         Object.entries(kSources)
           .map(([k, v]) => k + " " + v)
           .join("；") || "—",
-      )}</td></tr><tr><td>成交额口径</td><td>${esc(unitText)}</td></tr><tr><td>基准完成日</td><td>A股 ${esc(expectedA || "缺失")}；美股 ${esc(expectedUS || "缺失")}</td></tr><tr><td>日期新鲜 / 仲裁</td><td>${healthText.map(esc).join("<br>")}</td></tr><tr><td>盘中报价层</td><td>${esc(state.intradayMessage)}；最近 ${state.lastIntradayAt ? esc(new Date(state.lastIntradayAt).toLocaleString("zh-CN", { hour12: false })) : "—"}</td></tr><tr><td>盘中证据</td><td>报价样本组 ${Object.keys(state.intradaySamples).length}；触发档案 ${state.intradayRecords.length}（只含公开行情，本机保存）</td></tr><tr><td>缓存 / 降级</td><td>${esc(cacheText)}；K线降级记录 ${fallbackCount} 条</td></tr><tr><td>复权 / 一致性</td><td class="${unconfirmedA || dataWarnings.length ? "warn" : ""}">${unconfirmedA ? `A股复权未确认 ${unconfirmedA} 只；` : ""}${dataWarnings.length ? `警告 ${dataWarnings.length} 条` : "无警告"}</td></tr><tr><td>深扫覆盖</td><td>${esc(state.scanMeta || "尚未执行全A扫描")}</td></tr><tr><td>账户数据</td><td>未读取、未计算、未上传</td></tr></tbody></table>`;
+      )}</td></tr><tr><td>成交额口径</td><td>${esc(unitText)}</td></tr><tr><td>基准完成日</td><td>A股 ${esc(expectedA || "缺失")}；美股 ${esc(expectedUS || "缺失")}</td></tr><tr><td>日期新鲜 / 仲裁</td><td>${healthText.map(esc).join("<br>")}</td></tr><tr><td>盘中报价层</td><td>${esc(state.intradayMessage)}；最近 ${state.lastIntradayAt ? esc(new Date(state.lastIntradayAt).toLocaleString("zh-CN", { hour12: false })) : "—"}</td></tr><tr><td>盘中证据</td><td>触发档案 ${state.intradayRecords.length}（只含公开行情，本机保存）</td></tr><tr><td>缓存 / 降级</td><td>${esc(cacheText)}；K线降级记录 ${fallbackCount} 条</td></tr><tr><td>复权 / 一致性</td><td class="${unconfirmedA || dataWarnings.length ? "warn" : ""}">${unconfirmedA ? `A股复权未确认 ${unconfirmedA} 只；` : ""}${dataWarnings.length ? `警告 ${dataWarnings.length} 条` : "无警告"}</td></tr><tr><td>深扫覆盖</td><td>${esc(state.scanMeta || "尚未执行全A扫描")}</td></tr><tr><td>账户数据</td><td>未读取、未计算、未上传</td></tr></tbody></table>`;
     const tests = getSelfTests();
     $("selfTests").innerHTML =
       tests
